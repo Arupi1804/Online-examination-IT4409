@@ -16,3 +16,5 @@ Socket.IO xác thực session ở handshake và kiểm tra quyền trên từng 
 | `session:replaced` | Server → Client | Thông báo phiên bị thay thế |
 
 Mỗi event triển khai phải bổ sung payload, ACK, mã lỗi, role và room nhận sự kiện vào tài liệu này.
+
+Quy ước Redis và xử lý `endTime + 5 giây` cho nộp bài/auto-submit nằm trong [Redis Key Schema](redis-key-schema.md). PostgreSQL là nguồn thời gian và trạng thái chính thức; Redis là cache và hàng đợi.
