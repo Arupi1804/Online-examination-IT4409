@@ -12,31 +12,31 @@ Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn
 - Quyền ghi: #1 Auth/DevOps sở hữu session và login limit; #2 Exam Core sở hữu trạng thái PostgreSQL; #3 Backend Realtime sở hữu runtime, presence, WebSocket limit và job. Module khác gọi service của chủ sở hữu thay vì sửa Redis trực tiếp.
 - Không cache đáp án đúng, câu trả lời, điểm số hoặc log vi phạm trong Redis.
 
-| Tham số v1 | Giá trị | Ý nghĩa |
-| --- | ---: | --- |
-| `SESSION_IDLE_TTL_SEC` | 28800 (8 giờ) | Session và con trỏ phiên; cookie có cùng thời hạn |
-| `LOGIN_WINDOW_SEC` | 900 (15 phút) | Cửa sổ giới hạn đăng nhập |
-| `WS_WINDOW_SEC` | 60 | Cửa sổ giới hạn event Socket.IO |
-| `HEARTBEAT_INTERVAL_SEC` | 5–10 | Chu kỳ client gửi `proctor:heartbeat` |
-| `OFFLINE_AFTER_SEC` | 30 | Ngưỡng đánh dấu offline |
-| `SUBMIT_GRACE_SEC` | 5 | Thời gian nộp thủ công sau `endTime` |
-| `RUNTIME_RETAIN_SEC` | 86400 (24 giờ) | Giữ cache sau `endTime` |
-| `PRESENCE_RETAIN_SEC` | 3600 (1 giờ) | Giữ presence sau `endTime` |
+| Tham số v1               |        Giá trị | Ý nghĩa                                           |
+| ------------------------ | -------------: | ------------------------------------------------- |
+| `SESSION_IDLE_TTL_SEC`   |  28800 (8 giờ) | Session và con trỏ phiên; cookie có cùng thời hạn |
+| `LOGIN_WINDOW_SEC`       |  900 (15 phút) | Cửa sổ giới hạn đăng nhập                         |
+| `WS_WINDOW_SEC`          |             60 | Cửa sổ giới hạn event Socket.IO                   |
+| `HEARTBEAT_INTERVAL_SEC` |           5–10 | Chu kỳ client gửi `proctor:heartbeat`             |
+| `OFFLINE_AFTER_SEC`      |             30 | Ngưỡng đánh dấu offline                           |
+| `SUBMIT_GRACE_SEC`       |              5 | Thời gian nộp thủ công sau `endTime`              |
+| `RUNTIME_RETAIN_SEC`     | 86400 (24 giờ) | Giữ cache sau `endTime`                           |
+| `PRESENCE_RETAIN_SEC`    |   3600 (1 giờ) | Giữ presence sau `endTime`                        |
 
 ## 2. Danh mục key do ứng dụng quản lý
 
 `sid` là ID session chỉ phía server dùng. `digest` là HMAC-SHA256 hex của IP hoặc email đã chuẩn hóa (email: `trim` và lowercase), dùng secret riêng của server. IP phải lấy sau khi cấu hình đúng proxy tin cậy; không tin trực tiếp header do client tự đặt.
 
-| Key pattern | Redis type / value | Bên ghi | TTL | Mục đích / nguồn khôi phục |
-| --- | --- | --- | --- | --- |
-| `P:sess:<sid>` | String; session đã serialize theo Redis store | #1 | 8 giờ idle, gia hạn theo hoạt động hợp lệ | Session của `express-session`; hết hạn thì đăng nhập lại. Store phải dùng prefix `P:sess:`. |
-| `P:auth:user:<userId>:active_session` | String; `sid` được chấp nhận | #1 | Bằng TTL session, làm mới cùng session | Single-session; handshake/event nhạy cảm so khớp `sid`. |
-| `P:rl:login:ip:<digest>` | String; bộ đếm | #1 | 15 phút từ lần thử đầu | Mặc định 30 lần/15 phút/IP. |
-| `P:rl:login:account:<digest>` | String; bộ đếm | #1 | 15 phút từ lần thử đầu | Mặc định 5 lần/15 phút/email. |
-| `P:rl:ws:<userId>:<eventSlug>` | String; bộ đếm | #3 | 60 giây từ event đầu | `eventSlug` thay `:` bằng `_`; giới hạn ở mục 4. |
-| `P:exam:<examId>:runtime` | Hash; `status`, `startTimeMs`, `endTimeMs` | #3 | DRAFT/SCHEDULED: 1 giờ từ lần đọc; RUNNING: tới `endTime + 24 giờ`; ENDED: 1 giờ | Cache từ `exams.status`, `start_time`, `end_time`; cache miss thì nạp lại DB. |
-| `P:exam:<examId>:presence` | Sorted Set; member `attemptId`, score `lastHeartbeatMs` | #3 | Tới `endTime + 1 giờ`, cập nhật khi gia hạn | Online/offline; cache miss thì chờ heartbeat mới. |
-| `P:exam:<examId>:offline_notified` | Set; các `attemptId` đã phát thông báo offline | #3 | Cùng hạn với `presence` | Chống phát `monitor:student_update` offline lặp lại trong mỗi lượt quét; mất key thì tính lại từ `presence`. |
+| Key pattern                           | Redis type / value                                      | Bên ghi | TTL                                                                              | Mục đích / nguồn khôi phục                                                                                   |
+| ------------------------------------- | ------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `P:sess:<sid>`                        | String; session đã serialize theo Redis store           | #1      | 8 giờ idle, gia hạn theo hoạt động hợp lệ                                        | Session của `express-session`; hết hạn thì đăng nhập lại. Store phải dùng prefix `P:sess:`.                  |
+| `P:auth:user:<userId>:active_session` | String; `sid` được chấp nhận                            | #1      | Bằng TTL session, làm mới cùng session                                           | Single-session; handshake/event nhạy cảm so khớp `sid`.                                                      |
+| `P:rl:login:ip:<digest>`              | String; bộ đếm                                          | #1      | 15 phút từ lần thử đầu                                                           | Mặc định 30 lần/15 phút/IP.                                                                                  |
+| `P:rl:login:account:<digest>`         | String; bộ đếm                                          | #1      | 15 phút từ lần thử đầu                                                           | Mặc định 5 lần/15 phút/email.                                                                                |
+| `P:rl:ws:<userId>:<eventSlug>`        | String; bộ đếm                                          | #3      | 60 giây từ event đầu                                                             | `eventSlug` thay `:` bằng `_`; giới hạn ở mục 4.                                                             |
+| `P:exam:<examId>:runtime`             | Hash; `status`, `startTimeMs`, `endTimeMs`              | #3      | DRAFT/SCHEDULED: 1 giờ từ lần đọc; RUNNING: tới `endTime + 24 giờ`; ENDED: 1 giờ | Cache từ `exams.status`, `start_time`, `end_time`; cache miss thì nạp lại DB.                                |
+| `P:exam:<examId>:presence`            | Sorted Set; member `attemptId`, score `lastHeartbeatMs` | #3      | Tới `endTime + 1 giờ`, cập nhật khi gia hạn                                      | Online/offline; cache miss thì chờ heartbeat mới.                                                            |
+| `P:exam:<examId>:offline_notified`    | Set; các `attemptId` đã phát thông báo offline          | #3      | Cùng hạn với `presence`                                                          | Chống phát `monitor:student_update` offline lặp lại trong mỗi lượt quét; mất key thì tính lại từ `presence`. |
 
 `presence` chỉ tồn tại khi kỳ thi đã có `endTime`. Không có TTL riêng cho member trong Sorted Set; member cũ được coi là offline theo score.
 
@@ -74,14 +74,14 @@ Dashboard coi attempt online khi `lastHeartbeatMs >= nowMs - 30000`. Khi socket 
 
 Counter dùng cửa sổ cố định; TTL đặt một lần khi tăng từ 0 lên 1, không gia hạn sau mỗi event. Dùng Lua để `INCR` và đặt TTL lần đầu trong một thao tác nguyên tử, tránh counter không có TTL khi process dừng giữa chừng.
 
-| Nhóm | Key | Giới hạn mặc định |
-| --- | --- | ---: |
-| Login theo tài khoản | `P:rl:login:account:<digest>` | 5 / 15 phút |
-| Login theo IP | `P:rl:login:ip:<digest>` | 30 / 15 phút |
-| `proctor:heartbeat` | `P:rl:ws:<userId>:proctor_heartbeat` | 20 / phút |
-| `proctor:violation` | `P:rl:ws:<userId>:proctor_violation` | 30 / phút |
-| `room:join`, `attempt:rejoin` | `P:rl:ws:<userId>:<eventSlug>` | 20 / phút / event |
-| `exam:start`, `exam:extend`, `attempt:force_submit` | `P:rl:ws:<userId>:<eventSlug>` | 10 / phút / event |
+| Nhóm                                                | Key                                  | Giới hạn mặc định |
+| --------------------------------------------------- | ------------------------------------ | ----------------: |
+| Login theo tài khoản                                | `P:rl:login:account:<digest>`        |       5 / 15 phút |
+| Login theo IP                                       | `P:rl:login:ip:<digest>`             |      30 / 15 phút |
+| `proctor:heartbeat`                                 | `P:rl:ws:<userId>:proctor_heartbeat` |         20 / phút |
+| `proctor:violation`                                 | `P:rl:ws:<userId>:proctor_violation` |         30 / phút |
+| `room:join`, `attempt:rejoin`                       | `P:rl:ws:<userId>:<eventSlug>`       | 20 / phút / event |
+| `exam:start`, `exam:extend`, `attempt:force_submit` | `P:rl:ws:<userId>:<eventSlug>`       | 10 / phút / event |
 
 REST trả HTTP 429 khi vượt giới hạn; Socket.IO trả ACK lỗi theo `docs/ws-events.md`. Rate limit không thay thế xác thực session và kiểm tra quyền trên `examId`/`attemptId`.
 

@@ -1,4 +1,42 @@
 services:
+  server:
+    build:
+      context: .
+      target: server
+    environment:
+      NODE_ENV: production
+      SERVER_PORT: 3000
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-online_exam}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-online_exam}?schema=public
+      REDIS_URL: redis://redis:6379/0
+      SESSION_SECRET: ${SESSION_SECRET:-local-only-replace-before-deployment}
+    ports:
+      - '127.0.0.1:${SERVER_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  client:
+    build:
+      context: .
+      target: client
+    ports:
+      - '127.0.0.1:5173:5173'
+    depends_on:
+      server:
+        condition: service_healthy
   postgres:
     image: postgres:16-alpine
     container_name: online-exam-postgres
@@ -7,12 +45,16 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-online_exam}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-online_exam} -d ${POSTGRES_DB:-online_exam}"]
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-online_exam} -d ${POSTGRES_DB:-online_exam}',
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -20,12 +62,12 @@ services:
     image: redis:7-alpine
     container_name: online-exam-redis
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 5s
       retries: 10
