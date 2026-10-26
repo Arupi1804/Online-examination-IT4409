@@ -1,17 +1,35 @@
 openapi: 3.0.3
 info:
   title: Online Examination API
-  version: 0.0.0
+  version: 0.1.0
   description: >-
-    Workspace bootstrap contract. Only health is implemented.
-    TV2 must specify the exam/auth endpoints from CONTRACT.md before integration.
+    Contract REST giữa client và server. Quy ước chung (envelope, định dạng,
+    mã HTTP) nằm trong docs/CONTRACT.md; quy tắc nghiệp vụ (quyền sở hữu,
+    chấm điểm, thời gian) nằm trong docs/api-contract.md. Mọi endpoint cần
+    cookie session, trừ những endpoint khai báo `security: []`.
 servers:
   - url: /api/v1
+security:
+  - sessionCookie: []
+tags:
+  - name: system
+    description: Kiểm tra server còn sống.
+  - name: auth
+    description: Chủ sở hữu TV1. TV2 phác thảo để frontend dựng mock; TV1 chốt.
+  - name: questions
+    description: Ngân hàng câu hỏi của giáo viên (TV2).
+  - name: exams
+    description: Kỳ thi, mã phòng, kết quả và thống kê (TV2).
+  - name: attempts
+    description: Bài làm của thí sinh (TV2).
+
 paths:
   /health:
     get:
+      tags: [system]
       operationId: getHealth
       summary: HTTP liveness (not database or Redis readiness)
+      security: []
       responses:
         '200':
           description: HTTP server is running
@@ -28,12 +46,857 @@ paths:
                       status:
                         type: string
                         enum: [ok]
+
+  # ---------------------------------------------------------------- auth
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Đăng ký tài khoản thí sinh
+      description: Tài khoản tạo qua endpoint này luôn có role STUDENT.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterInput'
+      responses:
+        '201':
+          $ref: '#/components/responses/UserOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '409':
+          description: '`EMAIL_TAKEN` — email đã được dùng'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Đăng nhập, đặt cookie session; phiên cũ của cùng user bị thay thế
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+      responses:
+        '200':
+          $ref: '#/components/responses/UserOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: '`AUTH_INVALID_CREDENTIALS`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Hủy session hiện tại
+      responses:
+        '204':
+          description: Đã đăng xuất
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: Người dùng hiện tại
+      responses:
+        '200':
+          $ref: '#/components/responses/UserOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ----------------------------------------------------------- questions
+  /questions:
+    get:
+      tags: [questions]
+      operationId: listQuestions
+      summary: Danh sách câu hỏi của giáo viên hiện tại
+      description: 'Role: TEACHER. Chỉ trả câu hỏi do chính giáo viên tạo.'
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [createdAt:desc, createdAt:asc, updatedAt:desc]
+            default: createdAt:desc
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/QuestionType'
+        - name: q
+          in: query
+          description: Tìm theo nội dung (không phân biệt hoa thường)
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Question'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [questions]
+      operationId: createQuestion
+      summary: Tạo câu hỏi
+      description: 'Role: TEACHER.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionInput'
+      responses:
+        '201':
+          $ref: '#/components/responses/QuestionOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /questions/import:
+    post:
+      tags: [questions]
+      operationId: importQuestions
+      summary: Import câu hỏi từ file Excel
+      description: >-
+        Role: TEACHER. File .xlsx, tối đa 2 MB và 500 dòng, sheet đầu tiên,
+        dòng 1 là tiêu đề với các cột: `type` (SINGLE | MULTIPLE | TRUE_FALSE),
+        `content`, `explanation` (tùy chọn), `optionA` … `optionF`, `correct`
+        (chữ cái đáp án đúng, cách nhau bằng dấu phẩy, ví dụ `A,C`). Import
+        theo kiểu tất cả hoặc không: chỉ cần một dòng sai thì không tạo câu
+        nào và trả 400 kèm danh sách lỗi theo dòng.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Đã tạo toàn bộ câu hỏi trong file
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [createdCount, questionIds]
+                    properties:
+                      createdCount:
+                        type: integer
+                      questionIds:
+                        type: array
+                        items:
+                          type: string
+                          format: uuid
+        '400':
+          description: >-
+            `VALIDATION_FAILED`; `details[].field` dạng `rows[5].correct`
+            (số dòng theo Excel).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /questions/{questionId}:
+    parameters:
+      - $ref: '#/components/parameters/QuestionId'
+    get:
+      tags: [questions]
+      operationId: getQuestion
+      summary: Chi tiết câu hỏi
+      description: 'Role: TEACHER (chủ sở hữu).'
+      responses:
+        '200':
+          $ref: '#/components/responses/QuestionOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [questions]
+      operationId: updateQuestion
+      summary: Sửa câu hỏi (thay toàn bộ nội dung và đáp án)
+      description: >-
+        Role: TEACHER (chủ sở hữu). Đáp án được tạo lại nên `options[].id`
+        đổi sau khi sửa. Câu hỏi đang dùng trong kỳ thi khác DRAFT
+        (`inUse: true`) không được sửa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionInput'
+      responses:
+        '200':
+          $ref: '#/components/responses/QuestionOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/QuestionInUse'
+    delete:
+      tags: [questions]
+      operationId: deleteQuestion
+      summary: Xóa câu hỏi
+      description: >-
+        Role: TEACHER (chủ sở hữu). Câu hỏi nằm trong bất kỳ kỳ thi nào
+        (kể cả DRAFT) không xóa được; gỡ khỏi kỳ thi trước.
+      responses:
+        '204':
+          description: Đã xóa
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/QuestionInUse'
+
+  # --------------------------------------------------------------- exams
+  /exams:
+    get:
+      tags: [exams]
+      operationId: listExams
+      summary: Danh sách kỳ thi của giáo viên hiện tại
+      description: 'Role: TEACHER.'
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [createdAt:desc, createdAt:asc, startTime:desc]
+            default: createdAt:desc
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ExamStatus'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Exam'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [exams]
+      operationId: createExam
+      summary: Tạo kỳ thi ở trạng thái DRAFT
+      description: >-
+        Role: TEACHER. Server sinh `roomCode`. Thứ tự câu hỏi theo thứ tự
+        mảng `questions`. Chỉ được dùng câu hỏi của chính giáo viên.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExamInput'
+      responses:
+        '201':
+          $ref: '#/components/responses/ExamDetailOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /exams/join:
+    post:
+      tags: [exams]
+      operationId: joinExam
+      summary: Thí sinh tra cứu kỳ thi bằng mã phòng
+      description: >-
+        Role: STUDENT. Chỉ kỳ thi SCHEDULED hoặc RUNNING mới vào được; kỳ thi
+        DRAFT được coi như không tồn tại. Endpoint không tạo bài làm; sau đó
+        client vào phòng realtime bằng event `room:join`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roomCode]
+              properties:
+                roomCode:
+                  $ref: '#/components/schemas/RoomCode'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ExamJoinInfo'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`ROOM_NOT_FOUND`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: '`EXAM_ENDED`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /exams/{examId}:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    get:
+      tags: [exams]
+      operationId: getExam
+      summary: Chi tiết kỳ thi kèm câu hỏi và đáp án đúng
+      description: 'Role: TEACHER (chủ sở hữu).'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExamDetailOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [exams]
+      operationId: updateExam
+      summary: Sửa kỳ thi (thay toàn bộ cấu hình và danh sách câu hỏi)
+      description: 'Role: TEACHER (chủ sở hữu). Chỉ khi DRAFT hoặc SCHEDULED.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExamInput'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExamDetailOk'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ExamNotEditable'
+    delete:
+      tags: [exams]
+      operationId: deleteExam
+      summary: Xóa kỳ thi
+      description: 'Role: TEACHER (chủ sở hữu). Chỉ khi DRAFT.'
+      responses:
+        '204':
+          description: Đã xóa
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ExamNotEditable'
+  /exams/{examId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    post:
+      tags: [exams]
+      operationId: publishExam
+      summary: Công bố kỳ thi (DRAFT → SCHEDULED), mở phòng chờ
+      description: >-
+        Role: TEACHER (chủ sở hữu). Kỳ thi phải có ít nhất một câu hỏi. Bắt
+        đầu thi (SCHEDULED → RUNNING) đi qua event WebSocket `exam:start`,
+        không qua REST.
+      responses:
+        '200':
+          $ref: '#/components/responses/ExamDetailOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ExamNotEditable'
+        '422':
+          description: '`VALIDATION_FAILED` — kỳ thi chưa có câu hỏi'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /exams/{examId}/attempts:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    post:
+      tags: [attempts]
+      operationId: startAttempt
+      summary: Bắt đầu (hoặc tiếp tục) làm bài và nhận đề
+      description: >-
+        Role: STUDENT. Nếu thí sinh đang có bài IN_PROGRESS của kỳ thi này thì
+        trả lại đúng bài đó (200) với cùng thứ tự xáo trộn — dùng khi tải lại
+        trang. Ngược lại tạo bài mới (201). Đề không bao giờ chứa đáp án đúng
+        hay lời giải.
+      responses:
+        '200':
+          $ref: '#/components/responses/AttemptPaperOk'
+        '201':
+          $ref: '#/components/responses/AttemptPaperOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: '`ATTEMPT_LIMIT_REACHED`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: '`EXAM_NOT_STARTED` hoặc `EXAM_ENDED`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /exams/{examId}/results:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    get:
+      tags: [exams]
+      operationId: listExamResults
+      summary: Kết quả mọi bài làm của kỳ thi
+      description: 'Role: TEACHER (chủ sở hữu). Mỗi dòng là một bài làm.'
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [score:desc, score:asc, submittedAt:asc, name:asc]
+            default: score:desc
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/AttemptStatus'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttemptSummary'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /exams/{examId}/stats:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    get:
+      tags: [exams]
+      operationId: getExamStats
+      summary: Thống kê điểm, độ khó từng câu và bảng xếp hạng
+      description: >-
+        Role: TEACHER (chủ sở hữu). Chỉ tính bài đã nộp; thí sinh làm nhiều
+        lần thì lấy bài điểm cao nhất.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ExamStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /exams/{examId}/export:
+    parameters:
+      - $ref: '#/components/parameters/ExamId'
+    get:
+      tags: [exams]
+      operationId: exportExamResults
+      summary: Xuất bảng điểm ra Excel hoặc PDF
+      description: 'Role: TEACHER (chủ sở hữu).'
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [xlsx, pdf]
+      responses:
+        '200':
+          description: 'File đính kèm (`Content-Disposition: attachment`)'
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ------------------------------------------------------------ attempts
+  /attempts/{attemptId}/answers/{questionId}:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      - $ref: '#/components/parameters/QuestionId'
+    put:
+      tags: [attempts]
+      operationId: saveAnswer
+      summary: Autosave đáp án một câu (ghi đè)
+      description: >-
+        Role: STUDENT (chủ bài làm). Mảng rỗng nghĩa là bỏ chọn. SINGLE và
+        TRUE_FALSE chỉ nhận tối đa một lựa chọn. Sau `endTime` không nhận
+        thêm đáp án.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selectedOptionIds]
+              properties:
+                selectedOptionIds:
+                  type: array
+                  uniqueItems: true
+                  maxItems: 10
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: Đã lưu
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SavedAnswer'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AttemptAlreadySubmitted'
+        '422':
+          description: '`EXAM_ENDED`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /attempts/{attemptId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    post:
+      tags: [attempts]
+      operationId: submitAttempt
+      summary: Nộp bài thủ công
+      description: >-
+        Role: STUDENT (chủ bài làm). Chấp nhận khi `now <= endTime + 5 giây`.
+        Server chấm điểm ngay khi nộp.
+      responses:
+        '200':
+          description: Đã nộp
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AttemptSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AttemptAlreadySubmitted'
+        '422':
+          description: '`SUBMIT_TOO_LATE`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /attempts/{attemptId}/result:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    get:
+      tags: [attempts]
+      operationId: getAttemptResult
+      summary: Kết quả một bài làm
+      description: >-
+        Role: STUDENT (chủ bài làm) hoặc TEACHER (chủ kỳ thi). Thí sinh thấy
+        điểm ngay sau khi nộp, nhưng `questions` (đáp án đúng, lời giải) là
+        null cho đến khi kỳ thi ENDED. Giáo viên luôn thấy đầy đủ.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AttemptResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: '`ATTEMPT_NOT_SUBMITTED` — bài còn đang làm'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     sessionCookie:
       type: apiKey
       in: cookie
       name: connect.sid
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ExamId:
+      name: examId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    UserOk:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                $ref: '#/components/schemas/User'
+    QuestionOk:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                $ref: '#/components/schemas/Question'
+    ExamDetailOk:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                $ref: '#/components/schemas/ExamDetail'
+    AttemptPaperOk:
+      description: Đề của bài làm
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                $ref: '#/components/schemas/AttemptPaper'
+    ValidationFailed:
+      description: '`VALIDATION_FAILED` — input sai; `details` chỉ ra trường lỗi'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: '`AUTH_SESSION_EXPIRED` hoặc `AUTH_SESSION_REPLACED`'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: '`FORBIDDEN` — sai role'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: '`NOT_FOUND` — không tồn tại hoặc không thuộc quyền sở hữu'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Vượt rate limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    QuestionInUse:
+      description: '`QUESTION_IN_USE`'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ExamNotEditable:
+      description: '`EXAM_NOT_EDITABLE` — trạng thái kỳ thi không cho phép'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    AttemptAlreadySubmitted:
+      description: '`ATTEMPT_ALREADY_SUBMITTED`'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
   schemas:
     ErrorResponse:
       type: object
@@ -57,3 +920,598 @@ components:
                     type: string
                   issue:
                     type: string
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+
+    Role:
+      type: string
+      enum: [ADMIN, TEACHER, STUDENT]
+    QuestionType:
+      type: string
+      enum: [SINGLE, MULTIPLE, TRUE_FALSE]
+    ExamStatus:
+      type: string
+      enum: [DRAFT, SCHEDULED, RUNNING, ENDED]
+    AttemptStatus:
+      type: string
+      enum: [IN_PROGRESS, SUBMITTED, AUTO_SUBMITTED, FORCE_SUBMITTED]
+    RoomCode:
+      type: string
+      pattern: '^[A-HJ-NP-Z2-9]{6}$'
+      example: K7M2QX
+    Score:
+      type: number
+      description: Làm tròn 2 chữ số thập phân
+      example: 7.5
+
+    User:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+    RegisterInput:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    OptionInput:
+      type: object
+      required: [content, isCorrect]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        isCorrect:
+          type: boolean
+    QuestionInput:
+      type: object
+      description: >-
+        SINGLE: đúng 1 đáp án đúng. MULTIPLE: ít nhất 1 đáp án đúng.
+        TRUE_FALSE: đúng 2 đáp án, 1 đáp án đúng. Thứ tự hiển thị theo thứ
+        tự mảng `options`.
+      required: [type, content, options]
+      properties:
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        content:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        explanation:
+          type: string
+          nullable: true
+          maxLength: 5000
+        options:
+          type: array
+          minItems: 2
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/OptionInput'
+    Option:
+      type: object
+      required: [id, content, isCorrect]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        isCorrect:
+          type: boolean
+    Question:
+      type: object
+      description: Dạng dành cho giáo viên — có đáp án đúng.
+      required:
+        [id, type, content, explanation, options, inUse, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        content:
+          type: string
+        explanation:
+          type: string
+          nullable: true
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/Option'
+        inUse:
+          type: boolean
+          description: Đang nằm trong kỳ thi khác DRAFT; không được sửa/xóa
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ExamInput:
+      type: object
+      required: [title, durationSec, questions]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        durationSec:
+          type: integer
+          minimum: 60
+          maximum: 14400
+        shuffleQuestions:
+          type: boolean
+          default: false
+        shuffleOptions:
+          type: boolean
+          default: false
+        maxAttempts:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 1
+        questions:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [questionId, points]
+            properties:
+              questionId:
+                type: string
+                format: uuid
+              points:
+                type: number
+                exclusiveMinimum: true
+                minimum: 0
+                maximum: 100
+    Exam:
+      type: object
+      required:
+        - id
+        - title
+        - roomCode
+        - durationSec
+        - status
+        - startTime
+        - endTime
+        - shuffleQuestions
+        - shuffleOptions
+        - maxAttempts
+        - questionCount
+        - totalPoints
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        roomCode:
+          $ref: '#/components/schemas/RoomCode'
+        durationSec:
+          type: integer
+        status:
+          $ref: '#/components/schemas/ExamStatus'
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+        shuffleQuestions:
+          type: boolean
+        shuffleOptions:
+          type: boolean
+        maxAttempts:
+          type: integer
+        questionCount:
+          type: integer
+        totalPoints:
+          $ref: '#/components/schemas/Score'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ExamDetail:
+      allOf:
+        - $ref: '#/components/schemas/Exam'
+        - type: object
+          required: [questions]
+          properties:
+            questions:
+              type: array
+              items:
+                type: object
+                required: [points, question]
+                properties:
+                  points:
+                    $ref: '#/components/schemas/Score'
+                  question:
+                    $ref: '#/components/schemas/Question'
+    ExamJoinInfo:
+      type: object
+      required:
+        - examId
+        - title
+        - status
+        - durationSec
+        - questionCount
+        - startTime
+        - endTime
+        - serverTime
+        - maxAttempts
+        - attemptsUsed
+        - activeAttemptId
+      properties:
+        examId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [SCHEDULED, RUNNING]
+        durationSec:
+          type: integer
+        questionCount:
+          type: integer
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+        serverTime:
+          type: string
+          format: date-time
+        maxAttempts:
+          type: integer
+        attemptsUsed:
+          type: integer
+        activeAttemptId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Bài IN_PROGRESS hiện có, nếu thí sinh đang làm dở
+
+    PaperOption:
+      type: object
+      description: Không có `isCorrect`.
+      required: [id, content]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+    PaperQuestion:
+      type: object
+      description: Không có đáp án đúng và lời giải.
+      required: [questionId, type, content, points, options]
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        content:
+          type: string
+        points:
+          $ref: '#/components/schemas/Score'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaperOption'
+    SavedAnswer:
+      type: object
+      required: [questionId, selectedOptionIds, updatedAt]
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        selectedOptionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        updatedAt:
+          type: string
+          format: date-time
+    AttemptPaper:
+      type: object
+      required:
+        - attemptId
+        - examId
+        - status
+        - startedAt
+        - endTime
+        - serverTime
+        - questions
+        - answers
+      properties:
+        attemptId:
+          type: string
+          format: uuid
+        examId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/AttemptStatus'
+        startedAt:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        serverTime:
+          type: string
+          format: date-time
+        questions:
+          type: array
+          description: Đã xáo trộn theo seed riêng của bài làm
+          items:
+            $ref: '#/components/schemas/PaperQuestion'
+        answers:
+          type: array
+          description: Các câu đã lưu (rỗng nếu bài mới)
+          items:
+            $ref: '#/components/schemas/SavedAnswer'
+
+    AttemptSummary:
+      type: object
+      required:
+        - attemptId
+        - examId
+        - user
+        - status
+        - startedAt
+        - submittedAt
+        - score
+        - maxScore
+        - answeredCount
+        - violationCount
+      properties:
+        attemptId:
+          type: string
+          format: uuid
+        examId:
+          type: string
+          format: uuid
+        user:
+          type: object
+          required: [id, name, email]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            email:
+              type: string
+        status:
+          $ref: '#/components/schemas/AttemptStatus'
+        startedAt:
+          type: string
+          format: date-time
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        score:
+          type: number
+          nullable: true
+        maxScore:
+          type: number
+          nullable: true
+        answeredCount:
+          type: integer
+        violationCount:
+          type: integer
+    AttemptResult:
+      type: object
+      required:
+        - attemptId
+        - examId
+        - examTitle
+        - status
+        - startedAt
+        - submittedAt
+        - score
+        - maxScore
+        - questions
+      properties:
+        attemptId:
+          type: string
+          format: uuid
+        examId:
+          type: string
+          format: uuid
+        examTitle:
+          type: string
+        status:
+          $ref: '#/components/schemas/AttemptStatus'
+        startedAt:
+          type: string
+          format: date-time
+        submittedAt:
+          type: string
+          format: date-time
+        score:
+          $ref: '#/components/schemas/Score'
+        maxScore:
+          $ref: '#/components/schemas/Score'
+        questions:
+          type: array
+          nullable: true
+          description: null với thí sinh khi kỳ thi chưa ENDED
+          items:
+            type: object
+            required:
+              - questionId
+              - type
+              - content
+              - explanation
+              - points
+              - earnedPoints
+              - selectedOptionIds
+              - options
+            properties:
+              questionId:
+                type: string
+                format: uuid
+              type:
+                $ref: '#/components/schemas/QuestionType'
+              content:
+                type: string
+              explanation:
+                type: string
+                nullable: true
+              points:
+                $ref: '#/components/schemas/Score'
+              earnedPoints:
+                $ref: '#/components/schemas/Score'
+              selectedOptionIds:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+              options:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Option'
+
+    ExamStats:
+      type: object
+      required:
+        - attemptCount
+        - submittedCount
+        - studentCount
+        - maxScore
+        - average
+        - median
+        - highest
+        - lowest
+        - distribution
+        - questions
+        - leaderboard
+      properties:
+        attemptCount:
+          type: integer
+        submittedCount:
+          type: integer
+        studentCount:
+          type: integer
+          description: Số thí sinh có ít nhất một bài đã nộp
+        maxScore:
+          $ref: '#/components/schemas/Score'
+        average:
+          type: number
+          nullable: true
+        median:
+          type: number
+          nullable: true
+        highest:
+          type: number
+          nullable: true
+        lowest:
+          type: number
+          nullable: true
+        distribution:
+          type: array
+          description: 10 khoảng đều theo % điểm (0–10%, 10–20%, …, 90–100%)
+          items:
+            type: object
+            required: [fromPercent, toPercent, count]
+            properties:
+              fromPercent:
+                type: integer
+              toPercent:
+                type: integer
+              count:
+                type: integer
+        questions:
+          type: array
+          description: Độ khó từng câu, theo thứ tự trong kỳ thi
+          items:
+            type: object
+            required: [questionId, content, answeredCount, correctRate]
+            properties:
+              questionId:
+                type: string
+                format: uuid
+              content:
+                type: string
+              answeredCount:
+                type: integer
+              correctRate:
+                type: number
+                minimum: 0
+                maximum: 1
+                description: Tỉ lệ bài trả lời đúng hoàn toàn
+        leaderboard:
+          type: array
+          description: >-
+            Top 10, xếp theo điểm giảm dần rồi thời gian làm bài tăng dần
+          items:
+            type: object
+            required: [rank, userId, name, score, durationSec]
+            properties:
+              rank:
+                type: integer
+              userId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              score:
+                $ref: '#/components/schemas/Score'
+              durationSec:
+                type: integer
