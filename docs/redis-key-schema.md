@@ -1,6 +1,6 @@
 # Redis Key Schema (v1)
 
-Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn dữ liệu chính thức; Redis giữ session, rate limit, cache timer, presence và job. Mất Redis không được làm mất bài làm, đáp án, kết quả hoặc log vi phạm.
+Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn dữ liệu chính thức; Redis giữ session, rate limit, cache timer và presence. Worker khôi phục lịch hết giờ từ PostgreSQL. Mất Redis không được làm mất bài làm, đáp án, kết quả hoặc log vi phạm.
 
 ## 1. Quy ước chung
 
@@ -9,7 +9,7 @@ Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn
 - ID trong key là UUID chữ thường từ PostgreSQL. Không đặt `roomCode`, email, IP hoặc tên người dùng thô trong key.
 - Thời gian trong value/score là Unix epoch **milliseconds** do server tạo. TTL/`EX` tính bằng **seconds**; `PEXPIREAT` tính bằng milliseconds. API/Socket.IO gửi thời gian dạng ISO 8601 UTC.
 - Mỗi key do ứng dụng sở hữu phải có TTL. Không dùng `KEYS` hoặc wildcard delete trong request; chỉ dùng key đã biết. `SCAN` chỉ dành cho vận hành.
-- Quyền ghi: #1 Auth/DevOps sở hữu session và login limit; #2 Exam Core sở hữu trạng thái PostgreSQL; #3 Backend Realtime sở hữu runtime, presence, WebSocket limit và job. Module khác gọi service của chủ sở hữu thay vì sửa Redis trực tiếp.
+- Quyền ghi: #1 Auth/DevOps sở hữu session và login limit; #2 Exam Core sở hữu trạng thái PostgreSQL; #3 Backend Realtime sở hữu runtime, presence và WebSocket limit. Module khác gọi service của chủ sở hữu thay vì sửa Redis trực tiếp.
 - Không cache đáp án đúng, câu trả lời, điểm số hoặc log vi phạm trong Redis.
 
 | Tham số v1 | Giá trị | Ý nghĩa |
@@ -60,7 +60,7 @@ endTimeMs    <epoch-ms>
 
 #2 cập nhật `exams` bằng transaction và trả trạng thái đã commit. #3 ghi cache, đặt lại TTL và phát `exam:started`, `exam:extended`, `timer:sync` hoặc `exam:ended`. Trước khi bắt đầu thi có thể chưa có `startTimeMs`/`endTimeMs`. Nếu nhiều thay đổi chồng nhau, đọc lại trạng thái DB và thay cache bằng giá trị mới; không dùng một bản cache cũ ghi đè sau thay đổi mới.
 
-Mọi kiểm tra quyền, gia hạn, hết giờ và nộp bài dựa vào PostgreSQL. Khi Redis/server khởi động lại, #3 truy vấn các kỳ thi `RUNNING` từ PostgreSQL để nạp `end_time` và dựng lại job. Không kết luận kỳ thi đã kết thúc chỉ vì key Redis hết hạn. `timer:sync` gửi `endTime` và `serverTime` mỗi 10–15 giây.
+Mọi kiểm tra quyền, gia hạn, hết giờ và nộp bài dựa vào PostgreSQL. Khi Redis/server khởi động lại, #3 truy vấn các kỳ thi `RUNNING` từ PostgreSQL để nạp `end_time` và dựng lại timer. Không kết luận kỳ thi đã kết thúc chỉ vì key Redis hết hạn. `timer:sync` gửi `endTime` và `serverTime` mỗi 10–15 giây.
 
 ### Presence và giám sát (#3)
 
@@ -90,11 +90,11 @@ REST trả HTTP 429 khi vượt giới hạn; Socket.IO trả ACK lỗi theo `do
 Quy tắc v1 giải quyết xung đột giữa nộp thủ công và job tự nộp:
 
 1. `endTime = exams.end_time` là mốc dừng lưu đáp án. API nộp bài chấp nhận nộp thủ công khi `now <= endTime + 5 giây`, kể cả khi kỳ thi đã đóng nhận câu trả lời mới; sau đó trả `SUBMIT_TOO_LATE`.
-2. Lên lịch một delayed job cho kỳ thi tại `endTimeMs + 5001` (sau cửa sổ nộp 5 giây). Job đọc DB, gọi service nộp của #2 cho từng attempt còn `IN_PROGRESS`; service cập nhật có điều kiện để không nộp/chấm điểm hai lần.
-3. `exam:extend` cập nhật DB trước, sau đó lên lịch job mới. Job cũ phải đọc `exams.end_time`; nếu hạn đã đổi thì thoát, không nộp dựa trên payload cũ.
-4. Sau Redis/server restart, quét kỳ thi `RUNNING` và cả kỳ thi `ENDED` còn attempt chưa nộp từ PostgreSQL, lên lại job thiếu và xử lý kỳ thi quá hạn. Chỉ phát `exam:ended` sau khi các attempt cần chốt và trạng thái DB đã commit.
+2. Realtime worker đặt timer cục bộ tại `endTimeMs + 5001` và đối chiếu PostgreSQL mỗi 10 giây. Khi đến hạn, worker khóa dòng `exams` và các attempt còn `IN_PROGRESS` trong transaction, chấm/nộp đúng một lần, rồi chuyển exam thành `ENDED`.
+3. `exam:extend` cập nhật DB trước, sau đó đặt lại timer. Timer cũ phải đọc `exams.end_time` dưới khóa; nếu hạn đã đổi thì không nộp dựa trên thời gian cũ.
+4. Khi server khởi động hoặc timer mất, worker quét kỳ thi `RUNNING` và cả kỳ thi `ENDED` còn attempt chưa nộp từ PostgreSQL. Chỉ phát `exam:ended` sau khi transaction đã commit.
 
-Nếu dùng BullMQ: queue `auto-submit`, prefix `P:bull`, job ID `exam_<examId>_deadline_<endTimeMs>`. Các Redis key dưới prefix này **do BullMQ sở hữu**; ứng dụng không sửa/xóa trực tiếp cấu trúc nội bộ. Giữ job hoàn thành 24 giờ, job lỗi 7 ngày để chẩn đoán. BullMQ lock/retry không thay thế tính idempotent ở PostgreSQL.
+Triển khai v1 dùng PostgreSQL làm nguồn khôi phục job, không tạo key queue trong Redis. Mỗi server instance có thể chạy worker vì transaction và trạng thái attempt bảo vệ tính idempotent; khi chạy nhiều instance cần Socket.IO Redis adapter để phát sự kiện đến socket ở instance khác.
 
 ## 6. Socket.IO rooms và adapter
 
@@ -104,8 +104,8 @@ Khi chạy nhiều server instance, Socket.IO Redis adapter có thể dùng Pub/
 
 ## 7. Lỗi, khôi phục và thay đổi schema
 
-- Redis mất dữ liệu: session mất thì đăng nhập lại; runtime/job được dựng lại từ PostgreSQL; presence trở lại khi có heartbeat. Answers, điểm và log vẫn ở PostgreSQL.
-- Redis ghi lỗi sau khi DB commit: giữ kết quả DB, log lỗi và thử đồng bộ lại cache/job từ DB. Không đảo ngược transaction DB vì cache lỗi.
+- Redis mất dữ liệu: session mất thì đăng nhập lại; runtime/timer được dựng lại từ PostgreSQL; presence trở lại khi có heartbeat. Answers, điểm và log vẫn ở PostgreSQL.
+- Redis ghi lỗi sau khi DB commit: giữ kết quả DB, log lỗi và thử đồng bộ lại cache từ DB. Không đảo ngược transaction DB vì cache lỗi.
 - Xóa kỳ thi/người dùng hợp lệ: sau DB commit chỉ xóa đúng key liên quan. Không dùng `FLUSHDB` trong ứng dụng.
 - Không log `sid`, cookie, IP/email thô, payload đáp án hoặc secret. Chỉ cho Redis truy cập từ mạng tin cậy; môi trường khác nhau dùng prefix khác nhau.
 - Thêm key hoặc đổi type/TTL phải cập nhật file này cùng code. Đổi value không tương thích phải tăng phiên bản prefix (`v2`) và có kế hoạch xử lý key cũ.
