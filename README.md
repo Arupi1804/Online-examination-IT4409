@@ -109,4 +109,4 @@ Thêm dependency vào đúng package bằng `pnpm --filter @online-exam/server a
 
 Đọc [contract chung](docs/CONTRACT.md), [REST](docs/api-contract.md), [WS](docs/ws-events.md), [Redis](docs/redis-key-schema.md). Dùng feature branch, Conventional Commits và PR review. Điền handle thật trong CODEOWNERS rồi bật branch protection trên GitHub.
 
-Chưa có Auth, nghiệp vụ thi, seed hoặc mock. Prisma dependencies đã có; TV2 tạo `apps/server/prisma/schema.prisma`, baseline SQL hiện tại rồi mới dùng `db:generate`/`db:validate`. Không tự chạy migration lên database cũ. DATABASE*URL local phải khớp POSTGRES*\*; mật khẩu đặc biệt phải URL-encode trong URL.
+Auth/session đã triển khai; đọc [Auth contract](docs/auth-contract.md) về CSRF, single-session và tích hợp Socket.IO. Server cần PostgreSQL/Redis và `SESSION_SECRET` tối thiểu 32 ký tự trước khi khởi động. Chưa có nghiệp vụ thi, seed hoặc mock. Prisma schema đã ánh xạ SQL hiện có để generate client; TV2 tiếp tục baseline/migration. Không tự chạy migration hoặc `db push` lên database cũ. `DATABASE_URL` local phải khớp `POSTGRES_*`; mật khẩu đặc biệt phải URL-encode trong URL.

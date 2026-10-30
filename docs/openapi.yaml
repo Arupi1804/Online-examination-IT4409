@@ -1,13 +1,132 @@
 openapi: 3.0.3
 info:
   title: Online Examination API
-  version: 0.0.0
+  version: 0.1.0
   description: >-
-    Workspace bootstrap contract. Only health is implemented.
-    TV2 must specify the exam/auth endpoints from CONTRACT.md before integration.
+    Auth/session contract maintained by TV1. See docs/auth-contract.md.
+    Unsafe Auth requests require a trusted Origin and X-CSRF-Token from GET /auth/csrf.
 servers:
   - url: /api/v1
 paths:
+  /auth/csrf:
+    get:
+      operationId: getCsrfToken
+      summary: Establish anonymous session and obtain a CSRF token
+      responses:
+        '200':
+          description: Token and signed httpOnly cookie; Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [csrfToken]
+                    properties:
+                      csrfToken:
+                        type: string
+  /auth/register:
+    post:
+      operationId: registerStudent
+      summary: Register a STUDENT without logging in; role cannot be supplied
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Student created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/CsrfError'
+        '409':
+          description: AUTH_EMAIL_TAKEN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/login:
+    post:
+      operationId: login
+      summary: Rotate cookie and CSRF token, replacing the user's previous session
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session established; use the new CSRF token for subsequent POST requests
+          headers:
+            Set-Cookie:
+              description: Signed connect.sid; HttpOnly, SameSite=Lax, Path=/; Secure on HTTPS
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: AUTH_INVALID_CREDENTIALS (same error for unknown email or incorrect password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CsrfError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: Return the current user and renew HTTP session/cookie idle expiry
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current user; never includes passwordHash or session ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/SessionError'
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the current session and disconnect its sockets
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Session revoked and cookie cleared; no response body
+        '401':
+          $ref: '#/components/responses/SessionError'
+        '403':
+          $ref: '#/components/responses/CsrfError'
   /health:
     get:
       operationId: getHealth
@@ -29,12 +148,130 @@ paths:
                         type: string
                         enum: [ok]
 components:
+  parameters:
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      description: Must exactly equal CLIENT_ORIGIN; browsers set this automatically
+      schema:
+        type: string
+        format: uri
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Token from /auth/csrf, or the rotated token returned by /auth/login
+      schema:
+        type: string
+  responses:
+    ValidationError:
+      description: VALIDATION_FAILED
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    CsrfError:
+      description: CSRF_INVALID (missing/mismatched token or untrusted Origin)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    SessionError:
+      description: AUTH_SESSION_EXPIRED or AUTH_SESSION_REPLACED
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: RATE_LIMITED
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            example: 900
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   securitySchemes:
     sessionCookie:
       type: apiKey
       in: cookie
       name: connect.sid
   schemas:
+    AuthUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [ADMIN, TEACHER, STUDENT]
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 72
+          description: At most 72 UTF-8 bytes; no trimming or case conversion
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 72
+          description: At most 72 UTF-8 bytes
+    UserResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user]
+          properties:
+            user:
+              $ref: '#/components/schemas/AuthUser'
+    AuthResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user, csrfToken]
+          properties:
+            user:
+              $ref: '#/components/schemas/AuthUser'
+            csrfToken:
+              type: string
     ErrorResponse:
       type: object
       required: [error]

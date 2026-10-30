@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { AuthRole } from './auth.js';
+export * from './auth.js';
 
-export const Role = z.enum(['ADMIN', 'TEACHER', 'STUDENT']);
+export const Role = AuthRole;
 export type Role = z.infer<typeof Role>;
 export const QuestionType = z.enum(['SINGLE', 'MULTIPLE', 'TRUE_FALSE']);
 export const ExamStatus = z.enum(['DRAFT', 'SCHEDULED', 'RUNNING', 'ENDED']);
@@ -48,6 +50,10 @@ export const ERROR_CODES = {
   AUTH_INVALID_CREDENTIALS: 'AUTH_INVALID_CREDENTIALS',
   AUTH_SESSION_EXPIRED: 'AUTH_SESSION_EXPIRED',
   AUTH_SESSION_REPLACED: 'AUTH_SESSION_REPLACED',
+  AUTH_EMAIL_TAKEN: 'AUTH_EMAIL_TAKEN',
+  CSRF_INVALID: 'CSRF_INVALID',
+  RATE_LIMITED: 'RATE_LIMITED',
+  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
   FORBIDDEN: 'FORBIDDEN',
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   ROOM_NOT_FOUND: 'ROOM_NOT_FOUND',

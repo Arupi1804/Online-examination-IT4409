@@ -1,5 +1,7 @@
 # Tài liệu dự án
 
+- `auth-contract.md`: API Auth, CSRF, session/single-session, middleware HTTP/Socket và kiểm thử tích hợp.
+
 - `CONTRACT.md`: stack, phân công và quy tắc giao tiếp chung theo PDF.
 - `openapi.yaml`: OpenAPI khởi tạo, hiện mô tả health; TV2 tiếp tục bổ sung.
 
