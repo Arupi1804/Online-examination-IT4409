@@ -6,41 +6,41 @@ Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` h
 
 ## Client → server
 
-| Event | Role / quyền | Payload | ACK `data` | Sự kiện phát sau khi thành công |
-| --- | --- | --- | --- | --- |
-| `room:join` | Student: có `roomCode` hợp lệ hoặc attempt thuộc mình; Teacher: chủ kỳ thi; Admin: được xem | `{examId: UUID}` hoặc `{roomCode: string}` | `RoomState` | `room:state` đến socket; `participant:joined` đến `exam:<examId>` trừ socket gửi |
-| `exam:start` | Teacher sở hữu kỳ thi DRAFT/SCHEDULED, kỳ thi có câu hỏi | `{examId: UUID}` | `ExamClock` | `exam:started`, `timer:sync` đến `exam:<examId>` |
-| `exam:extend` | Teacher sở hữu kỳ thi RUNNING, chưa đến hạn | `{examId: UUID, additionalSec: integer}`; `1..86400` | `ExamClock` | `exam:extended`, `timer:sync` đến `exam:<examId>` |
-| `attempt:rejoin` | Student sở hữu attempt | `{attemptId: UUID}` | `AttemptState` | `attempt:state` đến socket; socket vào room kỳ thi |
-| `attempt:force_submit` | Teacher sở hữu kỳ thi chứa attempt | `{attemptId: UUID}` | `{submitted: boolean, attempt: Submitted \| null}`; `submitted=false` nếu đã nộp | `attempt:submitted` đến `user:<userId>` và `monitor:<examId>` nếu vừa nộp; `monitor:student_update` đến monitor |
-| `proctor:heartbeat` | Student sở hữu attempt IN_PROGRESS của kỳ thi RUNNING, trước `endTime` | `{attemptId: UUID}` | `{serverTime: ISO}` | `monitor:student_update` khi mới online hoặc trở lại online |
-| `proctor:violation` | Student sở hữu attempt IN_PROGRESS của kỳ thi RUNNING, trước `endTime` | `{attemptId: UUID, type: "TAB_BLUR" \| "FULLSCREEN_EXIT" \| "COPY_PASTE" \| "DISCONNECT", clientAt?: ISO}` | `{at: ISO}` | Ghi `proctor_logs` trước, sau đó phát `monitor:student_update` |
+| Event                  | Role / quyền                                                                                | Payload                                                                                                    | ACK `data`                                                                       | Sự kiện phát sau khi thành công                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `room:join`            | Student: có `roomCode` hợp lệ hoặc attempt thuộc mình; Teacher: chủ kỳ thi; Admin: được xem | `{examId: UUID}` hoặc `{roomCode: string}`                                                                 | `RoomState`                                                                      | `room:state` đến socket; `participant:joined` đến `exam:<examId>` trừ socket gửi                                |
+| `exam:start`           | Teacher sở hữu kỳ thi DRAFT/SCHEDULED, kỳ thi có câu hỏi                                    | `{examId: UUID}`                                                                                           | `ExamClock`                                                                      | `exam:started`, `timer:sync` đến `exam:<examId>`                                                                |
+| `exam:extend`          | Teacher sở hữu kỳ thi RUNNING, chưa đến hạn                                                 | `{examId: UUID, additionalSec: integer}`; `1..86400`                                                       | `ExamClock`                                                                      | `exam:extended`, `timer:sync` đến `exam:<examId>`                                                               |
+| `attempt:rejoin`       | Student sở hữu attempt                                                                      | `{attemptId: UUID}`                                                                                        | `AttemptState`                                                                   | `attempt:state` đến socket; socket vào room kỳ thi                                                              |
+| `attempt:force_submit` | Teacher sở hữu kỳ thi chứa attempt                                                          | `{attemptId: UUID}`                                                                                        | `{submitted: boolean, attempt: Submitted \| null}`; `submitted=false` nếu đã nộp | `attempt:submitted` đến `user:<userId>` và `monitor:<examId>` nếu vừa nộp; `monitor:student_update` đến monitor |
+| `proctor:heartbeat`    | Student sở hữu attempt IN_PROGRESS của kỳ thi RUNNING, trước `endTime`                      | `{attemptId: UUID}`                                                                                        | `{serverTime: ISO}`                                                              | `monitor:student_update` khi mới online hoặc trở lại online                                                     |
+| `proctor:violation`    | Student sở hữu attempt IN_PROGRESS của kỳ thi RUNNING, trước `endTime`                      | `{attemptId: UUID, type: "TAB_BLUR" \| "FULLSCREEN_EXIT" \| "COPY_PASTE" \| "DISCONNECT", clientAt?: ISO}` | `{at: ISO}`                                                                      | Ghi `proctor_logs` trước, sau đó phát `monitor:student_update`                                                  |
 
 `exam:start`, `exam:extend` và `attempt:force_submit` kiểm tra quyền ở PostgreSQL trên **mỗi lần gọi**. `roomCode` là mã phòng trong bảng `exams`; không dùng làm ID Redis. Việc vào phòng chờ không tạo attempt. REST của module Attempts phải tạo attempt trước khi thí sinh gửi heartbeat hoặc rejoin.
 
 ## Server → client
 
-| Event | Room đích | Payload |
-| --- | --- | --- |
-| `room:state` | Socket vừa join | `RoomState` |
-| `participant:joined`, `participant:left` | `exam:<examId>` trừ socket liên quan | `{examId, userId, role}`; `left` là ngắt socket, chưa kết luận offline |
-| `exam:started`, `exam:extended`, `timer:sync`, `exam:ended` | `exam:<examId>` | `ExamClock` |
-| `attempt:state` | Socket vừa rejoin | `AttemptState` |
-| `attempt:submitted` | `user:<userId>`, `monitor:<examId>` | `Submitted` |
-| `monitor:student_update` | `monitor:<examId>` | `StudentUpdate` |
-| `session:replaced` | Socket của session cũ | `{reason: "SESSION_REPLACED"}` rồi ngắt kết nối |
-| Event                                        | Chiều                              | Mục đích                        |
-| -------------------------------------------- | ---------------------------------- | ------------------------------- |
-| `room:join` / `room:state`                   | Client → Server / Server → Client  | Vào và cập nhật phòng thi       |
-| `participant:joined` / `participant:left`    | Server → Room                      | Thay đổi người tham gia         |
-| `exam:start` / `exam:started`                | Teacher → Server → Room            | Bắt đầu kỳ thi                  |
-| `exam:extend` / `exam:extended`              | Teacher → Server → Room            | Gia hạn thời gian               |
-| `timer:sync` / `exam:ended`                  | Server → Room                      | Đồng bộ thời gian, kết thúc thi |
-| `attempt:rejoin` / `attempt:state`           | Student → Server → Student         | Khôi phục bài làm               |
-| `attempt:force_submit` / `attempt:submitted` | Teacher → Server / Server → Client | Buộc nộp và thông báo nộp       |
-| `proctor:heartbeat` / `proctor:violation`    | Student → Server                   | Presence và vi phạm             |
-| `monitor:student_update`                     | Server → Monitor room              | Cập nhật dashboard giám sát     |
-| `session:replaced`                           | Server → Client                    | Thông báo phiên bị thay thế     |
+| Event                                                       | Room đích                            | Payload                                                                |
+| ----------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
+| `room:state`                                                | Socket vừa join                      | `RoomState`                                                            |
+| `participant:joined`, `participant:left`                    | `exam:<examId>` trừ socket liên quan | `{examId, userId, role}`; `left` là ngắt socket, chưa kết luận offline |
+| `exam:started`, `exam:extended`, `timer:sync`, `exam:ended` | `exam:<examId>`                      | `ExamClock`                                                            |
+| `attempt:state`                                             | Socket vừa rejoin                    | `AttemptState`                                                         |
+| `attempt:submitted`                                         | `user:<userId>`, `monitor:<examId>`  | `Submitted`                                                            |
+| `monitor:student_update`                                    | `monitor:<examId>`                   | `StudentUpdate`                                                        |
+| `session:replaced`                                          | Socket của session cũ                | `{reason: "SESSION_REPLACED"}` rồi ngắt kết nối                        |
+| Event                                                       | Chiều                                | Mục đích                                                               |
+| --------------------------------------------                | ----------------------------------   | -------------------------------                                        |
+| `room:join` / `room:state`                                  | Client → Server / Server → Client    | Vào và cập nhật phòng thi                                              |
+| `participant:joined` / `participant:left`                   | Server → Room                        | Thay đổi người tham gia                                                |
+| `exam:start` / `exam:started`                               | Teacher → Server → Room              | Bắt đầu kỳ thi                                                         |
+| `exam:extend` / `exam:extended`                             | Teacher → Server → Room              | Gia hạn thời gian                                                      |
+| `timer:sync` / `exam:ended`                                 | Server → Room                        | Đồng bộ thời gian, kết thúc thi                                        |
+| `attempt:rejoin` / `attempt:state`                          | Student → Server → Student           | Khôi phục bài làm                                                      |
+| `attempt:force_submit` / `attempt:submitted`                | Teacher → Server / Server → Client   | Buộc nộp và thông báo nộp                                              |
+| `proctor:heartbeat` / `proctor:violation`                   | Student → Server                     | Presence và vi phạm                                                    |
+| `monitor:student_update`                                    | Server → Monitor room                | Cập nhật dashboard giám sát                                            |
+| `session:replaced`                                          | Server → Client                      | Thông báo phiên bị thay thế                                            |
 
 `ExamClock = {examId, status, startTime, endTime, serverTime}`. `RoomState` thêm `roomCode`, `participantCount` (số socket đang kết nối) và `monitor?: StudentUpdate[]` chỉ dành cho Teacher/Admin. `AttemptState = {attemptId, examId, status, submittedAt, answers: [{questionId, optionIds}], clock}`. Không có đáp án đúng trong các payload này. `StudentUpdate = {examId, attemptId, userId, online, lastHeartbeat, answeredCount, violationCount, lastViolation, status}`. `Submitted = {examId, attemptId, userId, status, submittedAt}`.
 

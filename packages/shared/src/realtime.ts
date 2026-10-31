@@ -28,13 +28,29 @@ export const serverEvents = {
 
 export type Role = 'ADMIN' | 'TEACHER' | 'STUDENT';
 export type ExamStatus = 'DRAFT' | 'SCHEDULED' | 'RUNNING' | 'ENDED';
-export type AttemptStatus = 'IN_PROGRESS' | 'SUBMITTED' | 'AUTO_SUBMITTED' | 'FORCE_SUBMITTED';
-export type ViolationType = 'TAB_BLUR' | 'FULLSCREEN_EXIT' | 'COPY_PASTE' | 'DISCONNECT';
+export type AttemptStatus =
+  | 'IN_PROGRESS'
+  | 'SUBMITTED'
+  | 'AUTO_SUBMITTED'
+  | 'FORCE_SUBMITTED';
+export type ViolationType =
+  | 'TAB_BLUR'
+  | 'FULLSCREEN_EXIT'
+  | 'COPY_PASTE'
+  | 'DISCONNECT';
 export type RealtimeErrorCode =
-  | 'UNAUTHENTICATED' | 'SESSION_REPLACED' | 'FORBIDDEN' | 'NOT_FOUND'
-  | 'INVALID_PAYLOAD' | 'INVALID_STATE' | 'RATE_LIMITED' | 'INTERNAL_ERROR';
+  | 'UNAUTHENTICATED'
+  | 'SESSION_REPLACED'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'INVALID_PAYLOAD'
+  | 'INVALID_STATE'
+  | 'RATE_LIMITED'
+  | 'INTERNAL_ERROR';
 
-export type Ack<T> = { ok: true; data: T } | { ok: false; error: { code: RealtimeErrorCode; message: string } };
+export type Ack<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: RealtimeErrorCode; message: string } };
 
 // DTO thời gian: ID, trạng thái và hai mốc start/end theo ISO UTC; null khi chưa bắt đầu
 export type ExamClock = {

@@ -11,7 +11,11 @@ Module `src/modules/realtime` gắn Socket.IO vào HTTP server Express hiện c�
 import { mountRealtime } from './src/modules/realtime/index.js';
 
 const realtime = await mountRealtime({
-  httpServer, sessionMiddleware, sessionStore, pool, redis,
+  httpServer,
+  sessionMiddleware,
+  sessionStore,
+  pool,
+  redis,
   clientOrigin: process.env.CLIENT_ORIGIN!,
   environment: 'dev',
 });
