@@ -1,0 +1,59 @@
+openapi: 3.0.3
+info:
+  title: Online Examination API
+  version: 0.0.0
+  description: >-
+    Workspace bootstrap contract. Only health is implemented.
+    TV2 must specify the exam/auth endpoints from CONTRACT.md before integration.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: HTTP liveness (not database or Redis readiness)
+      responses:
+        '200':
+          description: HTTP server is running
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [status]
+                    properties:
+                      status:
+                        type: string
+                        enum: [ok]
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                required: [field, issue]
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string

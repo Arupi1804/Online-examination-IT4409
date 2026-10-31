@@ -30,3 +30,8 @@ await realtime.close();
 Session phải lưu `userId` và `role` ở cấp cao nhất; `sessionStore` và middleware là cùng instance với REST. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Redis client dùng logical DB 0. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
 
 Lệnh trong `apps/server`: `npm install`, `npm run check`, `npm test`, `npm run build`. Chi tiết event và ACK ở [WebSocket contract](../../docs/ws-events.md).
+Backend Express + Socket.IO. Module Realtime tuân thủ `docs/ws-events.md`; không tạo Socket.IO server độc lập ngoài gateway chung.
+
+Root `pnpm dev` khởi động ứng dụng. `src/index.ts` là entrypoint; `src/app.ts` là HTTP app dùng cho test. `/api/v1/health` chỉ kiểm tra HTTP liveness. Namespace `/exam` đóng mặc định đến khi TV1/TV3 triển khai xác thực session Redis. Chưa có API Auth/nghiệp vụ.
+
+Prisma dependencies đã chuẩn bị. TV2 tạo `prisma/schema.prisma` và baseline SQL hiện tại trước khi dùng `db:generate`/`db:validate`; không chạy migration tự động lên database cũ.

@@ -9,3 +9,7 @@ coverage/
 *.tsbuildinfo
 .vite/
 apps/server/uploads/
+.cache/
+playwright-report/
+test-results/
+test-pnpm/

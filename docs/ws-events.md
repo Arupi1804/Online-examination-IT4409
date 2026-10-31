@@ -29,6 +29,18 @@ Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` h
 | `attempt:submitted` | `user:<userId>`, `monitor:<examId>` | `Submitted` |
 | `monitor:student_update` | `monitor:<examId>` | `StudentUpdate` |
 | `session:replaced` | Socket của session cũ | `{reason: "SESSION_REPLACED"}` rồi ngắt kết nối |
+| Event                                        | Chiều                              | Mục đích                        |
+| -------------------------------------------- | ---------------------------------- | ------------------------------- |
+| `room:join` / `room:state`                   | Client → Server / Server → Client  | Vào và cập nhật phòng thi       |
+| `participant:joined` / `participant:left`    | Server → Room                      | Thay đổi người tham gia         |
+| `exam:start` / `exam:started`                | Teacher → Server → Room            | Bắt đầu kỳ thi                  |
+| `exam:extend` / `exam:extended`              | Teacher → Server → Room            | Gia hạn thời gian               |
+| `timer:sync` / `exam:ended`                  | Server → Room                      | Đồng bộ thời gian, kết thúc thi |
+| `attempt:rejoin` / `attempt:state`           | Student → Server → Student         | Khôi phục bài làm               |
+| `attempt:force_submit` / `attempt:submitted` | Teacher → Server / Server → Client | Buộc nộp và thông báo nộp       |
+| `proctor:heartbeat` / `proctor:violation`    | Student → Server                   | Presence và vi phạm             |
+| `monitor:student_update`                     | Server → Monitor room              | Cập nhật dashboard giám sát     |
+| `session:replaced`                           | Server → Client                    | Thông báo phiên bị thay thế     |
 
 `ExamClock = {examId, status, startTime, endTime, serverTime}`. `RoomState` thêm `roomCode`, `participantCount` (số socket đang kết nối) và `monitor?: StudentUpdate[]` chỉ dành cho Teacher/Admin. `AttemptState = {attemptId, examId, status, submittedAt, answers: [{questionId, optionIds}], clock}`. Không có đáp án đúng trong các payload này. `StudentUpdate = {examId, attemptId, userId, online, lastHeartbeat, answeredCount, violationCount, lastViolation, status}`. `Submitted = {examId, attemptId, userId, status, submittedAt}`.
 
