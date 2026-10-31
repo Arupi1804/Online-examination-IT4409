@@ -13,7 +13,7 @@ FROM build AS server
 ENV NODE_ENV=production
 EXPOSE 3000
 USER node
-CMD ["node", "apps/server/dist/index.js"]
+CMD ["node", "apps/server/dist/apps/server/src/index.js"]
 
 FROM nginx:1.28-alpine AS client
 COPY infra/nginx/default.conf /etc/nginx/conf.d/default.conf

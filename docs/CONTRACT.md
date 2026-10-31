@@ -10,7 +10,7 @@
 - Vitest + Supertest; Playwright cho E2E.
 - Phiên bản chính xác nằm trong manifests và lockfile; thay đổi qua PR.
 
-Giữ các module nghiệp vụ riêng `questions`, `exams`, `attempts`, `results` thay cho một thư mục `exam` lớn. Frontend giữ `features/teacher`, `features/student`, `components` thay cho đường dẫn minh họa trong PDF. Trách nhiệm không thay đổi. 
+Giữ các module nghiệp vụ riêng `questions`, `exams`, `attempts`, `results` thay cho một thư mục `exam` lớn. Frontend giữ `features/teacher`, `features/student`, `components` thay cho đường dẫn minh họa trong PDF. Trách nhiệm không thay đổi.
 
 ## Dữ liệu và giao tiếp
 
