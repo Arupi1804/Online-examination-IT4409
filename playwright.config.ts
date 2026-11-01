@@ -5,7 +5,8 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:5173' },
   webServer: {
     command: 'pnpm dev',
-    url: 'http://127.0.0.1:5173',
+    // Health through the Vite proxy: waits for both client and server.
+    url: 'http://127.0.0.1:5173/api/v1/health',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,
   },
