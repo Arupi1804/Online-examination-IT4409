@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --include ../../packages/shared/dist src/index.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "prisma generate && tsc --noEmit",
     "db:generate": "prisma generate",
     "prisma": "node --env-file=../../.env node_modules/prisma/build/index.js",
     "db:validate": "pnpm prisma validate",

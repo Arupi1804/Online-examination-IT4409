@@ -3,6 +3,39 @@ import { z } from 'zod';
 export const Role = z.enum(['ADMIN', 'TEACHER', 'STUDENT']);
 export type Role = z.infer<typeof Role>;
 export const QuestionType = z.enum(['SINGLE', 'MULTIPLE', 'TRUE_FALSE']);
+export type QuestionType = z.infer<typeof QuestionType>;
+export const QuestionInput = z
+  .object({
+    type: QuestionType,
+    content: z.string().trim().min(1).max(5000),
+    explanation: z.string().trim().max(5000).nullish(),
+    options: z
+      .array(
+        z.object({
+          content: z.string().trim().min(1).max(1000),
+          isCorrect: z.boolean(),
+        }),
+      )
+      .min(2)
+      .max(6),
+  })
+  .superRefine((q, ctx) => {
+    const correct = q.options.filter((o) => o.isCorrect).length;
+    const valid =
+      q.type === 'SINGLE'
+        ? correct === 1
+        : q.type === 'MULTIPLE'
+          ? correct >= 1
+          : q.options.length === 2 && correct === 1;
+    if (!valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['options'],
+        message: `Invalid correct options for ${q.type}`,
+      });
+    }
+  });
+export type QuestionInput = z.infer<typeof QuestionInput>;
 export const ExamStatus = z.enum(['DRAFT', 'SCHEDULED', 'RUNNING', 'ENDED']);
 export const AttemptStatus = z.enum([
   'IN_PROGRESS',
