@@ -1,12 +1,10 @@
+import './config/env.js';
 import { createServer } from 'node:http';
-import { fileURLToPath } from 'node:url';
-import { config } from 'dotenv';
 import { Server } from 'socket.io';
 import { z } from 'zod';
 import { ERROR_CODES, WS_NAMESPACE } from '@online-exam/shared';
 import { createApp } from './app.js';
 
-config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
 const env = z
   .object({
     SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
