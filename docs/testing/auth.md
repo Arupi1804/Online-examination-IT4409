@@ -5,14 +5,18 @@ Nhánh triển khai: `feature/Auth`, tạo từ `dev`.
 ## Đã xác nhận
 
 - Node 20.19.5, pnpm 10.11.0.
-- `pnpm check` thành công: lint, Prettier, TypeScript, 17 test, build client/server/shared.
-- Integration dùng Redis/PostgreSQL đang chạy: cookie/CSRF, đăng ký STUDENT, bcrypt, login/logout, rate limit, single-session và Prisma mapping.
+- Đợt đồng bộ contract `feature/core-openapi`: `pnpm check` thành công với lint, Prettier, TypeScript, 20 test và build client/server/shared.
+- `docs/openapi.yaml` và `docs/api-contract.md` khớp nguyên nội dung nhánh `feature/core-openapi` tại `45cc4ac`; không sửa quy tắc API core đã được duyệt.
+- Integration dùng Redis/PostgreSQL thật: đăng ký trực tiếp không cần token, response `{data: User}`, password 8–72 ký tự (gồm Unicode), lỗi `EMAIL_TAKEN`, login/logout, rate limit, single-session và Prisma mapping.
+- Kiểm tra nguồn request thay cho CSRF token: từ chối Origin/Referer khác nguồn, Fetch Metadata cross-site và form login; client JSON không cần header tự đặt. Cookie vẫn httpOnly và SameSite=Lax.
 - Session cũ không thể lưu lại hoặc xóa pointer của session mới.
 - Socket dùng cookie đã ký, bị từ chối khi thiếu/sai/hết phiên; bị ngắt khi login mới, logout hoặc idle expiry.
 - Socket không gia hạn Redis TTL; HTTP gia hạn cookie, session và pointer cùng nhau.
 - Test Redis dùng prefix UUID riêng; Prisma test tạo rồi xóa đúng email UUID riêng. Không reset/flush database, không sửa SQL/schema đang chạy.
 
-## Chưa xác nhận hoàn toàn
+## Giới hạn kiểm chứng
+
+E2E và Docker image chưa được chạy lại trong đợt đồng bộ core-openapi này. Các ghi nhận dưới đây là từ đợt triển khai Auth trước:
 
 - E2E client/API lần đầu thất bại do Vite sẵn sàng trước Prisma/Auth; test đã thêm bước poll health qua proxy trước khi mở trang. Lần chạy lại chưa được cho phép nên chưa xác nhận bản sửa E2E này.
 - Docker build đã compile thành công cả ba package trên Linux, nhưng bước export/unpack image thất bại với lỗi `parent snapshot ... does not exist`. Chưa xác nhận image chạy hoàn chỉnh; không xóa Docker cache/volume để xử lý lỗi máy.

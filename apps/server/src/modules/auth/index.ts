@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { Router, type RequestHandler } from 'express';
 import { AuthUser, LoginRequest, RegisterRequest } from '@online-exam/shared';
 import { AuthError } from './errors.js';
-import { AuthSessions, newCsrfToken } from './session.js';
+import { AuthSessions } from './session.js';
 import type { AuthRepository } from './types.js';
 import { bcryptPasswords, type PasswordHasher } from './services/password.js';
 
@@ -27,22 +27,13 @@ export async function createAuthRouter(options: {
   const passwords = options.passwords ?? bcryptPasswords();
   const dummyHash = await passwords.hash('dummy-password-for-auth-timing');
   const router = Router();
-  router.use(sessions.sessionMiddleware);
   router.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
+  router.use(sessions.sessionMiddleware);
   const digest = (value: string) =>
     createHmac('sha256', options.rateLimitSecret).update(value).digest('hex');
-
-  router.get(
-    '/csrf',
-    wrap(async (req, res) => {
-      req.session.csrfToken ??= newCsrfToken();
-      await sessions.save(req);
-      res.json({ data: { csrfToken: req.session.csrfToken } });
-    }),
-  );
 
   router.post(
     '/register',
@@ -58,7 +49,7 @@ export async function createAuthRouter(options: {
         name: input.name,
         passwordHash: await passwords.hash(input.password),
       });
-      res.status(201).json({ data: { user } });
+      res.status(201).json({ data: AuthUser.parse(user) });
     }),
   );
 
@@ -87,7 +78,7 @@ export async function createAuthRouter(options: {
         );
       await sessions.establish(req, user);
       res.json({
-        data: { user: AuthUser.parse(user), csrfToken: req.session.csrfToken },
+        data: AuthUser.parse(user),
       });
     }),
   );
@@ -113,7 +104,7 @@ export async function createAuthRouter(options: {
           'Account permissions changed',
         );
       }
-      res.json({ data: { user, csrfToken: req.session.csrfToken } });
+      res.json({ data: AuthUser.parse(user) });
     }),
   );
 

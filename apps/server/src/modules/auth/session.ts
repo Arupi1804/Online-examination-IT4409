@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import session, { type SessionData } from 'express-session';
 import type { Request, RequestHandler, Response } from 'express';
@@ -20,7 +20,6 @@ function equal(left: string, right: string): boolean {
   const b = Buffer.from(right);
   return a.length === b.length && timingSafeEqual(a, b);
 }
-export const newCsrfToken = () => randomBytes(32).toString('hex');
 
 export class AuthSessions {
   readonly sessionStore: AuthSessionStore;
@@ -150,17 +149,34 @@ export class AuthSessions {
 
   private async prepareHttp(req: Request): Promise<void> {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-      if (
-        req.get('origin') !== this.options.clientOrigin ||
-        !req.session.csrfToken ||
-        !equal(req.get(AUTH.CSRF_HEADER) ?? '', req.session.csrfToken)
-      ) {
-        throw new AuthError(
-          403,
-          'CSRF_INVALID',
-          'A trusted Origin and CSRF token are required',
-        );
+      const origin = req.get('origin');
+      const referer = req.get('referer');
+      let source = origin;
+      if (!source && referer) {
+        try {
+          source = new URL(referer).origin;
+        } catch {
+          throw new AuthError(403, 'FORBIDDEN', 'Untrusted request source');
+        }
       }
+      const fetchSite = req.get('sec-fetch-site');
+      if (
+        (source !== undefined && source !== this.options.clientOrigin) ||
+        fetchSite === 'cross-site' ||
+        (fetchSite !== undefined && source === undefined)
+      ) {
+        throw new AuthError(403, 'FORBIDDEN', 'Untrusted request source');
+      }
+      // Native API clients need no custom headers; HTML forms cannot send JSON login/register requests.
+      if (
+        ['/login', '/register'].includes(req.path) &&
+        !req.is('application/json')
+      )
+        throw new AuthError(
+          400,
+          'VALIDATION_FAILED',
+          'Content-Type must be application/json',
+        );
     }
     if (req.session.userId) {
       req.principal = await this.getPrincipal(req.sessionID);
@@ -187,7 +203,6 @@ export class AuthSessions {
     );
     req.session.userId = user.id;
     req.session.role = user.role;
-    req.session.csrfToken = newCsrfToken();
     req.session.touch();
     const oldSid = await this.sessionStore.activate(req.sessionID, req.session);
     // Prevent express-session from recreating a session replaced concurrently.

@@ -34,11 +34,7 @@ export class PrismaAuthRepository implements AuthRepository {
         'code' in error &&
         error.code === 'P2002'
       ) {
-        throw new AuthError(
-          409,
-          'AUTH_EMAIL_TAKEN',
-          'Email is already registered',
-        );
+        throw new AuthError(409, 'EMAIL_TAKEN', 'Email is already registered');
       }
       throw error;
     }

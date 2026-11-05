@@ -37,7 +37,7 @@ describe.skipIf(!process.env.AUTH_DATABASE_URL)(
           name: 'Duplicate',
           passwordHash: 'unused',
         }),
-      ).rejects.toMatchObject({ code: 'AUTH_EMAIL_TAKEN', status: 409 });
+      ).rejects.toMatchObject({ code: 'EMAIL_TAKEN', status: 409 });
     });
   },
 );

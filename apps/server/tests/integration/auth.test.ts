@@ -38,11 +38,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     },
     createStudent: async (input) => {
       if (users.has(input.email))
-        throw new AuthError(
-          409,
-          'AUTH_EMAIL_TAKEN',
-          'Email is already registered',
-        );
+        throw new AuthError(409, 'EMAIL_TAKEN', 'Email is already registered');
       const user = { ...input, id: randomUUID(), role: 'STUDENT' as const };
       users.set(input.email, user);
       return {
@@ -111,25 +107,17 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     await redis.quit();
   });
 
-  async function csrf(agent: Agent) {
-    const response = await agent.get('/api/v1/auth/csrf').expect(200);
-    return response.body.data.csrfToken as string;
-  }
   async function register(agent: Agent, email = 'student@example.test') {
-    const token = await csrf(agent);
     return agent
       .post('/api/v1/auth/register')
       .set('Origin', origin)
-      .set('X-CSRF-Token', token)
       .send({ email, name: 'Student', password })
       .expect(201);
   }
   async function login(agent: Agent, email = 'student@example.test') {
-    const token = await csrf(agent);
     return agent
       .post('/api/v1/auth/login')
       .set('Origin', origin)
-      .set('X-CSRF-Token', token)
       .send({ email, password })
       .expect(200);
   }
@@ -155,64 +143,131 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
 
   it('registers STUDENT only, hashes passwords and never returns the hash', async () => {
     const agent = request.agent(app);
-    const token = await csrf(agent);
-    const denied = await agent
+    const submittedRole = await agent
       .post('/api/v1/auth/register')
-      .set('Origin', origin)
-      .set('X-CSRF-Token', token)
       .send({
         email: 'admin@example.test',
         name: 'Admin',
-        password,
+        password: '12345678',
         role: 'ADMIN',
       })
-      .expect(400);
-    expect(denied.body.error.code).toBe('VALIDATION_FAILED');
-    const created = await register(agent, ' Student@Example.Test ');
-    expect(created.body.data.user).toMatchObject({
+      .expect(201);
+    expect(submittedRole.body.data.role).toBe('STUDENT');
+    expect(submittedRole.body.data).not.toHaveProperty('passwordHash');
+    const created = await register(agent, 'Student@Example.Test');
+    expect(created.body.data).toMatchObject({
       email: 'student@example.test',
       role: 'STUDENT',
     });
-    expect(created.body.data.user).not.toHaveProperty('passwordHash');
+    expect(created.body.data).not.toHaveProperty('passwordHash');
     expect(users.get('student@example.test')!.passwordHash).not.toBe(password);
     const duplicate = await agent
       .post('/api/v1/auth/register')
       .set('Origin', origin)
-      .set('X-CSRF-Token', await csrf(agent))
       .send({ email: 'student@example.test', name: 'Again', password })
       .expect(409);
-    expect(duplicate.body.error.code).toBe('AUTH_EMAIL_TAKEN');
+    expect(duplicate.body.error.code).toBe('EMAIL_TAKEN');
   });
 
-  it('requires Origin/CSRF, rotates the session and token on login, and logs out', async () => {
+  it('supports the core Auth flow without a CSRF bootstrap and rotates the login cookie', async () => {
     const agent = request.agent(app);
-    const csrfResponse = await agent.get('/api/v1/auth/csrf').expect(200);
-    const beforeCookie = cookie(csrfResponse);
-    await agent
-      .post('/api/v1/auth/login')
-      .send({ email: 'student@example.test', password })
-      .expect(403);
-    await agent
-      .post('/api/v1/auth/login')
-      .set('Origin', 'https://evil.example')
-      .set('X-CSRF-Token', csrfResponse.body.data.csrfToken)
-      .send({ email: 'student@example.test', password })
-      .expect(403);
+    await agent.get('/api/v1/auth/csrf').expect(404);
     await register(agent);
-    const loggedIn = await login(agent);
-    expect(cookie(loggedIn)).not.toBe(beforeCookie);
+    const first = await login(agent);
+    const loggedIn = await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password })
+      .expect(200);
+    expect(cookie(loggedIn)).not.toBe(cookie(first));
     expect(loggedIn.headers['set-cookie'].join(';')).toContain('HttpOnly');
     expect(loggedIn.headers['set-cookie'].join(';')).toContain('SameSite=Lax');
-    expect(loggedIn.body.data.csrfToken).not.toBe(
-      csrfResponse.body.data.csrfToken,
-    );
-    await agent.get('/api/v1/auth/me').expect(200);
+    expect(Object.keys(loggedIn.body)).toEqual(['data']);
+    expect(Object.keys(loggedIn.body.data).sort()).toEqual([
+      'email',
+      'id',
+      'name',
+      'role',
+    ]);
+    const me = await agent.get('/api/v1/auth/me').expect(200);
+    expect(me.body).toEqual(loggedIn.body);
+    await agent.post('/api/v1/auth/logout').expect(204);
+    await agent.get('/api/v1/auth/me').expect(401);
+  });
+
+  it('blocks cross-site browser requests and form logins without requiring custom headers', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    const wrongOrigin = await agent
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://evil.example')
+      .send({ email: 'student@example.test', password })
+      .expect(403);
+    expect(wrongOrigin.body.error.code).toBe('FORBIDDEN');
+    await agent
+      .post('/api/v1/auth/login')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .send({ email: 'student@example.test', password })
+      .expect(403);
+    await agent
+      .post('/api/v1/auth/login')
+      .set('Referer', 'https://evil.example/attack')
+      .send({ email: 'student@example.test', password })
+      .expect(403);
+    await agent
+      .post('/api/v1/auth/login')
+      .type('form')
+      .send({ email: 'student@example.test', password })
+      .expect(400);
+    const loggedIn = await login(agent);
     await agent
       .post('/api/v1/auth/logout')
-      .set('Origin', origin)
-      .set('X-CSRF-Token', loggedIn.body.data.csrfToken)
-      .expect(204);
-    await agent.get('/api/v1/auth/me').expect(401);
+      .set('Origin', 'https://evil.example')
+      .expect(403);
+    await agent.get('/api/v1/auth/me').expect(200);
+    const sid = (await redis.get(store.activeKey(loggedIn.body.data.id)))!;
+    expect(await redis.get(store.sessionPrefix + sid)).toBeTruthy();
+  });
+
+  it('matches RegisterInput limits and allows string passwords on LoginInput', async () => {
+    const agent = request.agent(app);
+    for (const value of ['short12', 'x'.repeat(73)]) {
+      const response = await agent
+        .post('/api/v1/auth/register')
+        .send({
+          email: 'invalid@example.test',
+          name: 'Invalid',
+          password: value,
+        })
+        .expect(400);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+    }
+    await agent
+      .post('/api/v1/auth/register')
+      .send({
+        email: 'unicode@example.test',
+        name: 'Unicode',
+        password: '\u{1F525}'.repeat(72),
+      })
+      .expect(201);
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'unicode@example.test', password: '\u{1F525}'.repeat(72) })
+      .expect(200);
+    const wrongSuffix = await agent
+      .post('/api/v1/auth/login')
+      .send({
+        email: 'unicode@example.test',
+        password: '\u{1F525}'.repeat(71) + 'x',
+      })
+      .expect(401);
+    expect(wrongSuffix.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
+    for (const value of ['', 'x'.repeat(100)]) {
+      const response = await agent
+        .post('/api/v1/auth/login')
+        .send({ email: 'missing@example.test', password: value })
+        .expect(401);
+      expect(response.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
+    }
   });
 
   it('replaces the old session, disconnects its socket and prevents stale saves/deletes', async () => {
@@ -220,7 +275,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const second = request.agent(app);
     await register(first);
     const loginA = await login(first);
-    const id = loginA.body.data.user.id as string;
+    const id = loginA.body.data.id as string;
     const oldSid = (await redis.get(store.activeKey(id)))!;
     const oldData = (await sessions.readSession(oldSid))!;
     const socket = await socketFor(cookie(loginA));
@@ -254,7 +309,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const agent = request.agent(app);
     await register(agent);
     const loggedIn = await login(agent);
-    const userId = loggedIn.body.data.user.id as string;
+    const userId = loggedIn.body.data.id as string;
     const sid = (await redis.get(store.activeKey(userId)))!;
     const sessionKey = store.sessionPrefix + sid;
     const activeKey = store.activeKey(userId);
@@ -284,7 +339,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const agent = request.agent(app);
     await register(agent);
     const loggedIn = await login(agent);
-    const sid = (await redis.get(store.activeKey(loggedIn.body.data.user.id)))!;
+    const sid = (await redis.get(store.activeKey(loggedIn.body.data.id)))!;
     await redis.del(store.sessionPrefix + sid);
     await agent.get('/api/v1/auth/me').expect(401);
     await expect(socketFor(cookie(loggedIn))).rejects.toMatchObject({
@@ -294,12 +349,10 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
 
   it('limits login attempts per normalized account', async () => {
     const agent = request.agent(app);
-    const token = await csrf(agent);
     for (let i = 0; i < 5; i++) {
       const failed = await agent
         .post('/api/v1/auth/login')
         .set('Origin', origin)
-        .set('X-CSRF-Token', token)
         .send({ email: 'missing@example.test', password })
         .expect(401);
       expect(failed.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
@@ -307,8 +360,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const blocked = await agent
       .post('/api/v1/auth/login')
       .set('Origin', origin)
-      .set('X-CSRF-Token', token)
-      .send({ email: ' MISSING@EXAMPLE.TEST ', password })
+      .send({ email: 'MISSING@EXAMPLE.TEST', password })
       .expect(429);
     expect(blocked.body.error.code).toBe('RATE_LIMITED');
     expect(blocked.headers['retry-after']).toBe('900');
@@ -318,7 +370,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const agent = request.agent(app);
     await register(agent);
     const loggedIn = await login(agent);
-    await redis.del(store.activeKey(loggedIn.body.data.user.id));
+    await redis.del(store.activeKey(loggedIn.body.data.id));
     await agent.get('/api/v1/auth/me').expect(401);
     // The invalid cookie is cleared, so the same browser can establish a new session.
     await login(agent);
@@ -329,7 +381,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const agent = request.agent(app);
     await register(agent);
     const loggedIn = await login(agent);
-    const userId = loggedIn.body.data.user.id as string;
+    const userId = loggedIn.body.data.id as string;
     const sid = (await redis.get(store.activeKey(userId)))!;
     const data = (await sessions.readSession(sid))!;
     data.cookie.expires = new Date(Date.now() + 500);
@@ -352,11 +404,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     const disconnected = new Promise<void>((resolve) =>
       socket.once('disconnect', () => resolve()),
     );
-    await agent
-      .post('/api/v1/auth/logout')
-      .set('Origin', origin)
-      .set('X-CSRF-Token', loggedIn.body.data.csrfToken)
-      .expect(204);
+    await agent.post('/api/v1/auth/logout').set('Origin', origin).expect(204);
     await disconnected;
     expect(socket.connected).toBe(false);
   });

@@ -1,36 +1,36 @@
-# Auth contract và session v1
+# Auth theo contract core-openapi
 
-TV1 sở hữu Auth. Client/server cùng import schema trong `@online-exam/shared`. Base URL `/api/v1`; response thành công `{ data }`, lỗi `{ error: { code, message, details? } }`. Auth response có `Cache-Control: no-store`. Không trả password hash, session ID hoặc secret.
+`docs/openapi.yaml` và `docs/api-contract.md` được lấy nguyên nội dung từ nhánh `feature/core-openapi`. Đây là nguồn chuẩn cho API; tài liệu này giải thích triển khai Auth/session của TV1. Client/server dùng schema tại `packages/shared/src/auth.ts`.
 
 ## Luồng frontend
 
-1. Gọi `GET /auth/csrf` với `credentials: 'include'` để lấy cookie anonymous và `data.csrfToken`.
-2. Mọi POST Auth gửi JSON, `credentials: 'include'`, header `X-CSRF-Token`. Trình duyệt tự gửi `Origin`; server yêu cầu Origin trùng chính xác `CLIENT_ORIGIN`. Khi test bằng Postman/curl phải tự gửi Origin này.
-3. `POST /auth/register` tạo STUDENT nhưng không tự đăng nhập. Public API không nhận trường `role`; TEACHER/ADMIN do luồng quản trị hoặc seed cấp.
-4. `POST /auth/login` tạo session ID mới, đổi CSRF token, vô hiệu session cũ. Dùng token mới từ response cho POST tiếp theo.
-5. `GET /auth/me` lấy user/token khi reload trang. 401 thì quay về đăng nhập; lấy lại `/auth/csrf` nếu cần.
-6. `POST /auth/logout` hủy session, xóa cookie, trả 204. Nếu đăng nhập tiếp thì lấy token mới từ `/auth/csrf`.
+1. Gửi trực tiếp `POST /api/v1/auth/register` với JSON `{email,password,name}`. Response 201 là `{data: User}`. Tài khoản luôn là STUDENT và chưa đăng nhập.
+2. Gửi trực tiếp `POST /api/v1/auth/login` với JSON `{email,password}` và `credentials: 'include'`. Response 200 là `{data: User}`; browser giữ cookie session httpOnly.
+3. Gọi `GET /api/v1/auth/me` với `credentials: 'include'` khi tải lại trang. Response 200 là `{data: User}`, 401 thì yêu cầu đăng nhập lại.
+4. Gửi `POST /api/v1/auth/logout` với `credentials: 'include'`; không cần body. Thành công trả 204 và xóa cookie.
 
-## Endpoint
+Không có bước `/auth/csrf`, không có `csrfToken` trong response và không cần header tự đặt. `User = {id,email,name,role}` nằm trực tiếp trong `data`, không có lớp `data.user`. Response Auth dùng `Cache-Control: no-store`, không trả password hash/session ID/secret.
 
-| Method/path           | Request                              | Thành công                                | Lỗi chính                                                                               |
-| --------------------- | ------------------------------------ | ----------------------------------------- | --------------------------------------------------------------------------------------- |
-| GET `/auth/csrf`      | Không có                             | 200 `{data:{csrfToken}}`                  | 500 khi store lỗi                                                                       |
-| POST `/auth/register` | `{email,password,name}`              | 201 `{data:{user}}`                       | 400 VALIDATION_FAILED, 403 CSRF_INVALID, 409 AUTH_EMAIL_TAKEN, 429 RATE_LIMITED         |
-| POST `/auth/login`    | `{email,password}`                   | 200 `{data:{user,csrfToken}}`, Set-Cookie | 400 VALIDATION_FAILED, 401 AUTH_INVALID_CREDENTIALS, 403 CSRF_INVALID, 429 RATE_LIMITED |
-| GET `/auth/me`        | Cookie                               | 200 `{data:{user,csrfToken}}`             | 401 AUTH_SESSION_EXPIRED / AUTH_SESSION_REPLACED                                        |
-| POST `/auth/logout`   | Cookie và CSRF token, không cần body | 204, xóa cookie                           | 401 AUTH_SESSION_EXPIRED / AUTH_SESSION_REPLACED, 403 CSRF_INVALID                      |
+## Input và mã lỗi
 
-`user = {id,email,name,role}`. Email trim/lowercase, tối đa 254 ký tự. Name trim, 1–100 ký tự. Đăng ký yêu cầu password 12–72 ký tự và tối đa 72 UTF-8 bytes để không bị bcrypt cắt mất phần cuối. Đăng nhập chấp nhận password 1–72 ký tự/72 bytes. Password băm bcrypt cost 12; không trim/lowercase password. Payload không nhận trường ngoài schema.
+- Đăng ký: email đúng định dạng, tối đa 254 ký tự; password 8–72 ký tự Unicode; name 1–100 ký tự. Thuộc tính ngoài schema được bỏ qua, kể cả `role`; server luôn cấp STUDENT.
+- LoginInput yêu cầu email đúng định dạng và password là string, không tự thêm minLength/maxLength ngoài OpenAPI. Password sai (kể cả chuỗi rỗng) trả 401 `AUTH_INVALID_CREDENTIALS` thay vì lỗi validation. Email được lưu/tra cứu lowercase; không trim hoặc đổi chữ password.
+- Register 400 `VALIDATION_FAILED`, 409 `EMAIL_TAKEN`, 429 `RATE_LIMITED`. Login 400 `VALIDATION_FAILED`, 401 `AUTH_INVALID_CREDENTIALS`, 429 `RATE_LIMITED`.
+- `/auth/me` và `/auth/logout` trả 401 `AUTH_SESSION_EXPIRED` hoặc `AUTH_SESSION_REPLACED` khi phiên không hợp lệ.
+- Login sai email/password dùng cùng mã lỗi. Rate limit 15 phút: 30 lần/IP, 5 lần/email chuẩn hóa; đăng ký 20 lần/IP. Redis key chứa digest HMAC thay cho email/IP. 429 có `Retry-After: 900`.
 
-Login sai email hoặc password cùng trả `AUTH_INVALID_CREDENTIALS`. Rate limit fixed window 15 phút: 30 lần/IP và 5 lần/email chuẩn hóa; cả lần thành công đều tính. Đăng ký giới hạn 20 lần/IP/15 phút. Lỗi 429 có `Retry-After: 900` (giới hạn trên để chờ cửa sổ kết thúc). Redis key chỉ chứa digest HMAC, không chứa IP/email thô.
+## Bảo vệ request và mật khẩu
+
+Client browser gửi JSON và `credentials: 'include'`; Origin được browser tự đặt. Server từ chối nguồn Origin/Referer khác `CLIENT_ORIGIN`, Fetch Metadata báo cross-site hoặc có Fetch Metadata nhưng không xác định được nguồn. Login/register không nhận form/text payload; yêu cầu `Content-Type: application/json`. Cookie giữ SameSite=Lax. Vi phạm nguồn request bị từ chối với 403 `FORBIDDEN`; không dùng mã CSRF_INVALID hoặc yêu cầu token ngoài contract. Native API clients có thể không gửi Origin/Referer/Fetch Metadata.
+
+Mật khẩu thông thường tiếp tục dùng bcrypt cost 12, tương thích hash đã có và seed bcrypt của TV2. OpenAPI giới hạn ký tự, không giới hạn UTF-8 bytes: password Unicode hợp lệ dài hơn 72 bytes được SHA-256/base64 trước bcrypt và lưu với prefix `bcrypt-sha256$`. Verify phân biệt prefix để không cắt mất đuôi Unicode; hash bcrypt cũ vẫn đăng nhập bình thường. Không thay đổi schema DB, không rehash hàng loạt tài khoản.
 
 ## Session và single-session
 
 - Cookie `connect.sid`, signed bằng `SESSION_SECRET` tối thiểu 32 ký tự; httpOnly, sameSite=lax, path=/, không đặt Domain.
 - Idle TTL 28.800 giây (8 giờ). HTTP hợp lệ gia hạn cookie, session và active pointer. Socket handshake/event không gia hạn cookie hoặc Redis TTL.
 - Local HTTP: `APP_ENV=dev`, `COOKIE_SECURE=false`. Staging/prod bắt buộc HTTPS và `COOKIE_SECURE=true`. `TRUST_PROXY_HOPS=1` chỉ khi đứng sau đúng một proxy tin cậy; mặc định 0. Không tin X-Forwarded-For từ client tùy ý.
-- Prefix `P=oe:<APP_ENV>:v1`. Session `P:sess:<sid>` có `cookie`, `userId`, `role`, `csrfToken`; các trường Auth ở cấp cao nhất để TV3 đọc.
+- Prefix `P=oe:<APP_ENV>:v1`. Session `P:sess:<sid>` có `cookie`, `userId`, `role`; các trường Auth ở cấp cao nhất để TV3 đọc.
 - Pointer `P:auth:user:<userId>:active_session` chứa sid hợp lệ. Lua tạo session mới và thay pointer nguyên tử, xóa session cũ; chỉ chấp nhận session trùng pointer.
 - Save/renew chỉ thực hiện khi sid vẫn active và session còn tồn tại. Lua đồng bộ hạn session/pointer; request cũ không thể phục hồi hoặc gia hạn phiên bị thay thế.
 - Destroy chỉ xóa pointer nếu nó vẫn trỏ đến chính sid bị hủy. Logout/cleanup của phiên cũ không xóa phiên mới.
@@ -41,7 +41,7 @@ Login sai email hoặc password cùng trả `AUTH_INVALID_CREDENTIALS`. Rate lim
 
 Auth xuất `AuthSessions` và `AuthRepository`. Bootstrap dùng `PrismaAuthRepository`; model ánh xạ SQL hiện có trong `apps/server/prisma/schema.prisma`. `prisma generate` không thay đổi database. Không chạy `db push`, `migrate dev`, `migrate reset` từ schema này trước khi TV2 baseline đầy đủ: SQL còn có CHECK và partial indexes Prisma không biểu diễn trong schema.
 
-Mount `sessions.sessionMiddleware` trước route nghiệp vụ, sau đó `sessions.requireUser` hoặc `sessions.requireRoles('TEACHER')`. Middleware session cũng bảo vệ CSRF trên method thay đổi dữ liệu. `req.principal = {id,userId,role,sid}`; role check không thay thế kiểm tra chủ sở hữu exam/attempt ở service.
+Mount `sessions.sessionMiddleware` trước route nghiệp vụ, sau đó `sessions.requireUser` hoặc `sessions.requireRoles('TEACHER')`. Middleware kiểm tra Origin/Referer và Fetch Metadata trên method thay đổi dữ liệu; không yêu cầu CSRF token header. `req.principal = {id,userId,role,sid}`; role check không thay thế kiểm tra chủ sở hữu exam/attempt ở service.
 
 ## Bàn giao cho TV3
 
