@@ -1,4 +1,5 @@
 FROM node:20.19.5-alpine AS build
+RUN apk add --no-cache openssl
 WORKDIR /app
 RUN npm install --global pnpm@10.11.0
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
