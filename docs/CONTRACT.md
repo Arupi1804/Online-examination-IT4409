@@ -10,7 +10,7 @@
 - Vitest + Supertest; Playwright cho E2E.
 - Phiên bản chính xác nằm trong manifests và lockfile; thay đổi qua PR.
 
-Giữ các module nghiệp vụ riêng `questions`, `exams`, `attempts`, `results` thay cho một thư mục `exam` lớn. Frontend giữ `features/teacher`, `features/student`, `components` thay cho đường dẫn minh họa trong PDF. Trách nhiệm không thay đổi. 
+Giữ các module nghiệp vụ riêng `questions`, `exams`, `attempts`, `results` thay cho một thư mục `exam` lớn. Frontend giữ `features/teacher`, `features/student`, `components` thay cho đường dẫn minh họa trong PDF. Trách nhiệm không thay đổi.
 
 ## Dữ liệu và giao tiếp
 
@@ -47,4 +47,4 @@ CODEOWNERS hiện là mẫu: thay handle thật và bật branch protection trê
 - TV3: điền payload/ACK/quyền của từng event, mock và logic realtime. Gateway hiện từ chối handshake để không mở kết nối chưa xác thực.
 - TV4/TV5: UI, mock API, route và E2E nghiệp vụ; không tạo type/event trùng shared.
 
-Definition of Done: lint/type-check/test/build thành công, chạy được bằng Compose, đúng contract, cập nhật tài liệu và có review. z
+Definition of Done: lint/type-check/test/build thành công, chạy được bằng Compose, đúng contract, cập nhật tài liệu và có review.
