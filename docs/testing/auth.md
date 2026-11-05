@@ -5,8 +5,9 @@ Nhánh triển khai: `feature/Auth`, tạo từ `dev`.
 ## Đã xác nhận
 
 - Node 20.19.5, pnpm 10.11.0.
-- Đợt đồng bộ contract `feature/core-openapi`: `pnpm check` thành công với lint, Prettier, TypeScript, 20 test và build client/server/shared.
-- `docs/openapi.yaml` và `docs/api-contract.md` khớp nguyên nội dung nhánh `feature/core-openapi` tại `45cc4ac`; không sửa quy tắc API core đã được duyệt.
+- Sau khi merge `dev` và khôi phục export Auth trong shared: `pnpm check` thành công với lint, Prettier, TypeScript, 20 test và build client/server/shared.
+- `docs/openapi.yaml` và `docs/api-contract.md` đã đồng bộ quy tắc từ `dev`: chỉ sửa kỳ thi DRAFT, publish đề rỗng trả 422 `VALIDATION_FAILED`.
+- E2E Chromium chạy với `CI=true`: 1/1 test thành công. Playwright chờ `/api/v1/health` qua proxy Vite trước khi chạy test.
 - Integration dùng Redis/PostgreSQL thật: đăng ký trực tiếp không cần token, response `{data: User}`, password 8–72 ký tự (gồm Unicode), lỗi `EMAIL_TAKEN`, login/logout, rate limit, single-session và Prisma mapping.
 - Kiểm tra nguồn request thay cho CSRF token: từ chối Origin/Referer khác nguồn, Fetch Metadata cross-site và form login; client JSON không cần header tự đặt. Cookie vẫn httpOnly và SameSite=Lax.
 - Session cũ không thể lưu lại hoặc xóa pointer của session mới.
@@ -16,9 +17,8 @@ Nhánh triển khai: `feature/Auth`, tạo từ `dev`.
 
 ## Giới hạn kiểm chứng
 
-E2E và Docker image chưa được chạy lại trong đợt đồng bộ core-openapi này. Các ghi nhận dưới đây là từ đợt triển khai Auth trước:
+Docker image chưa được chạy lại sau khi đồng bộ `dev` và sửa export Auth:
 
-- E2E client/API lần đầu thất bại do Vite sẵn sàng trước Prisma/Auth; test đã thêm bước poll health qua proxy trước khi mở trang. Lần chạy lại chưa được cho phép nên chưa xác nhận bản sửa E2E này.
 - Docker build đã compile thành công cả ba package trên Linux, nhưng bước export/unpack image thất bại với lỗi `parent snapshot ... does not exist`. Chưa xác nhận image chạy hoàn chỉnh; không xóa Docker cache/volume để xử lý lỗi máy.
 - GitHub Actions đã bổ sung service PostgreSQL/Redis, SQL init và biến test; chưa chạy workflow trên remote.
 
