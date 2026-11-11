@@ -25,5 +25,6 @@ Không chạy lại Docker image trong đợt xử lý review này:
 
 - Lần kiểm tra trước trên máy đã compile cả ba package trên Linux nhưng lỗi export/unpack snapshot. Sau đó Doson-062 báo cáo Docker build/run và Auth flow thành công trên PR #6; đó là bằng chứng của reviewer cho commit trước đợt sửa này, không phải lần chạy Docker mới ở đây.
 - GitHub Actions có service PostgreSQL/Redis, SQL init và biến test riêng; xem checks trên PR #6 để đối chiếu kết quả remote của đúng commit. Không suy ra kết quả CI từ các lần chạy local.
+- CI ở commit `0074b87` đã đạt `pnpm check` với 32 test nhưng dừng tại bước cài Chromium vì `ubuntu-latest` dùng Ubuntu 26.04, chưa được Playwright 1.51.1 hỗ trợ. Workflow cố định `ubuntu-24.04`, có trong danh sách hỗ trợ của phiên bản Playwright đang dùng; cần đối chiếu lần chạy CI mới sau thay đổi này.
 
 Xem `docs/auth-contract.md` để chạy lại integration tests và cách bàn giao middleware cho TV2/TV3. Không dùng database production cho test.
