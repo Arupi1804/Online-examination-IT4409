@@ -1,6 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import { Router } from 'express';
 import request from 'supertest';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
@@ -50,6 +59,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     },
   };
   const store = new AuthSessionStore(redis, prefix);
+  const passwords = bcryptPasswords(4);
   const sessions = new AuthSessions({
     store,
     secret: 'test-secret-with-at-least-thirty-two-characters',
@@ -68,9 +78,23 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
       sessions,
       repository,
       rateLimitSecret: 'test-rate-secret',
-      passwords: bcryptPasswords(4),
+      passwords,
     });
-    app = createApp(origin, { authRouter });
+    const apiRouter = Router();
+    apiRouter.get('/principal', sessions.requireUser, (req, res) =>
+      res.json({ data: { id: req.principal!.id, role: req.principal!.role } }),
+    );
+    apiRouter.post('/principal', sessions.requireUser, (_req, res) =>
+      res.json({ data: { ok: true } }),
+    );
+    apiRouter.get('/teacher', sessions.requireRoles('TEACHER'), (_req, res) =>
+      res.json({ data: { ok: true } }),
+    );
+    app = createApp(origin, {
+      authRouter,
+      apiRouter,
+      sessionMiddleware: sessions.sessionMiddleware,
+    });
     server.on('request', app);
     io = new Server(server);
     io.engine.use((req, res, next) =>
@@ -94,6 +118,7 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     socketUrl = `http://127.0.0.1:${address.port}/exam`;
   });
   beforeEach(async () => {
+    vi.restoreAllMocks();
     sockets.splice(0).forEach((socket) => socket.disconnect());
     users.clear();
     const keys = await redis.keys(`${prefix}:*`);
@@ -120,6 +145,12 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
       .set('Origin', origin)
       .send({ email, password })
       .expect(200);
+  }
+  function accountKey(email = 'student@example.test') {
+    const digest = createHmac('sha256', 'test-rate-secret')
+      .update(email.toLowerCase())
+      .digest('hex');
+    return `${prefix}:rl:login:account:${digest}`;
   }
   function cookie(response: request.Response): string {
     return (response.headers['set-cookie'] as unknown as string[])[0]!.split(
@@ -357,6 +388,8 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
         .expect(401);
       expect(failed.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
     }
+    const key = accountKey('missing@example.test');
+    await redis.pExpire(key, 15_000);
     const blocked = await agent
       .post('/api/v1/auth/login')
       .set('Origin', origin)
@@ -364,6 +397,192 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
       .expect(429);
     expect(blocked.body.error.code).toBe('RATE_LIMITED');
     expect(blocked.headers['retry-after']).toBe('900');
+    expect(await redis.get(key)).toBe('5');
+    expect(await redis.pTTL(key)).toBeGreaterThan(0);
+    expect(await redis.pTTL(key)).toBeLessThanOrEqual(15_000);
+  });
+
+  it('allows repeated successful logins without consuming the account failure budget', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    for (let i = 0; i < 7; i++) await login(agent);
+    expect(await redis.get(accountKey())).toBeNull();
+    const keys = await redis.keys(`${prefix}:rl:login:ip:*`);
+    expect(keys).toHaveLength(1);
+    expect(await redis.get(keys[0]!)).toBe('7');
+  });
+
+  it('clears earlier account failures on success and preserves the IP counter', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    for (let i = 0; i < 3; i++)
+      await agent
+        .post('/api/v1/auth/login')
+        .send({ email: 'student@example.test', password: 'wrong-password' })
+        .expect(401);
+    expect(await redis.get(accountKey())).toBe('3');
+    await login(agent);
+    expect(await redis.get(accountKey())).toBeNull();
+    const keys = await redis.keys(`${prefix}:rl:login:ip:*`);
+    expect(await redis.get(keys[0]!)).toBe('4');
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password: 'wrong-password' })
+      .expect(401);
+    expect(await redis.get(accountKey())).toBe('1');
+  });
+
+  it('blocks even a correct password before verification after five failed logins', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    const verify = vi.spyOn(passwords, 'verify');
+    for (let i = 0; i < 5; i++)
+      await agent
+        .post('/api/v1/auth/login')
+        .send({ email: 'student@example.test', password: 'wrong-password' })
+        .expect(401);
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password })
+      .expect(429);
+    expect(verify).toHaveBeenCalledTimes(5);
+  });
+
+  it('retains the IP limit across successful logins', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    const verify = vi.spyOn(passwords, 'verify');
+    for (let i = 0; i < 30; i++) await login(agent);
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password })
+      .expect(429);
+    expect(verify).toHaveBeenCalledTimes(30);
+    expect(await redis.get(accountKey())).toBeNull();
+  });
+
+  it('counts concurrent failures atomically without losing the fixed-window TTL', async () => {
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        request(app)
+          .post('/api/v1/auth/login')
+          .send({ email: 'missing@example.test', password: 'wrong-password' }),
+      ),
+    );
+    expect(
+      responses.filter((response) => response.status === 401),
+    ).toHaveLength(5);
+    expect(
+      responses.filter((response) => response.status === 429),
+    ).toHaveLength(3);
+    const key = accountKey('missing@example.test');
+    expect(Number(await redis.get(key))).toBeGreaterThanOrEqual(5);
+    expect(await redis.pTTL(key)).toBeGreaterThan(0);
+    expect(await redis.pTTL(key)).toBeLessThanOrEqual(900_000);
+  });
+
+  it('does not reset failures added while a successful login is being verified', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password: 'wrong-password' })
+      .expect(401);
+    let verificationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    let releaseVerification!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    const originalVerify = passwords.verify.bind(passwords);
+    vi.spyOn(passwords, 'verify').mockImplementationOnce(async (...args) => {
+      const valid = await originalVerify(...args);
+      verificationStarted();
+      await release;
+      return valid;
+    });
+    const pending = agent
+      .post('/api/v1/auth/login')
+      .send({ email: 'student@example.test', password })
+      .then((response) => response);
+    try {
+      await started;
+      await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'student@example.test', password: 'wrong-password' })
+        .expect(401);
+    } finally {
+      releaseVerification();
+    }
+    expect((await pending).status).toBe(200);
+    expect(await redis.get(accountKey())).toBe('2');
+  });
+
+  it('does not erase a new failure window using an old successful-login snapshot', async () => {
+    const key = accountKey();
+    await store.consumeLimit([key], [5]);
+    const snapshot = await store.checkLoginFailures(key);
+    await redis.del(key);
+    await redis.set(key, '1', { PX: 2000 });
+    await store.resetLoginFailures(key, snapshot);
+    expect(await redis.get(key)).toBe('1');
+    expect(await redis.pTTL(key)).toBeGreaterThan(0);
+    expect(await redis.pTTL(key)).toBeLessThanOrEqual(2000);
+  });
+
+  it('provides one shared principal and source checks to business routes', async () => {
+    const agent = request.agent(app);
+    await agent.get('/api/v1/principal').expect(401);
+    await register(agent);
+    const loggedIn = await login(agent);
+    const save = vi.spyOn(sessions, 'save');
+    const principal = await agent.get('/api/v1/principal').expect(200);
+    expect(principal.body.data).toEqual({
+      id: loggedIn.body.data.id,
+      role: 'STUDENT',
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    await agent.get('/api/v1/teacher').expect(403);
+    await agent
+      .post('/api/v1/principal')
+      .set('Origin', 'https://evil.example')
+      .expect(403);
+    await agent.post('/api/v1/principal').set('Origin', origin).expect(200);
+    users.get('student@example.test')!.role = 'TEACHER';
+    await login(agent);
+    await agent.get('/api/v1/teacher').expect(200);
+  });
+
+  it('keeps health public even when the cookie belongs to a revoked session', async () => {
+    const agent = request.agent(app);
+    await register(agent);
+    const loggedIn = await login(agent);
+    await redis.del(store.activeKey(loggedIn.body.data.id));
+    const principal = vi.spyOn(sessions, 'getPrincipal');
+    const health = await agent.get('/api/v1/health').expect(200);
+    expect(principal).not.toHaveBeenCalled();
+    expect(health.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('requires JSON for both Auth writes after mounting the shared API middleware', async () => {
+    for (const path of ['login', 'register']) {
+      const form = await request(app)
+        .post(`/api/v1/auth/${path}`)
+        .set('Origin', origin)
+        .type('form')
+        .send({ email: 'student@example.test', password, name: 'Student' })
+        .expect(400);
+      expect(form.body.error.code).toBe('VALIDATION_FAILED');
+      expect(form.headers['cache-control']).toBe('no-store');
+    }
+    const crossSite = await request(app)
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://evil.example')
+      .send({ email: 'student@example.test', password })
+      .expect(403);
+    expect(crossSite.headers['cache-control']).toBe('no-store');
   });
 
   it('does not authenticate when the active-session pointer is missing', async () => {

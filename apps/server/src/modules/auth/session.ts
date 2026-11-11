@@ -167,16 +167,6 @@ export class AuthSessions {
       ) {
         throw new AuthError(403, 'FORBIDDEN', 'Untrusted request source');
       }
-      // Native API clients need no custom headers; HTML forms cannot send JSON login/register requests.
-      if (
-        ['/login', '/register'].includes(req.path) &&
-        !req.is('application/json')
-      )
-        throw new AuthError(
-          400,
-          'VALIDATION_FAILED',
-          'Content-Type must be application/json',
-        );
     }
     if (req.session.userId) {
       req.principal = await this.getPrincipal(req.sessionID);

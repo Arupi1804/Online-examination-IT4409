@@ -84,6 +84,7 @@ try {
   const server = createServer(
     createApp(settings.CLIENT_ORIGIN, {
       authRouter,
+      sessionMiddleware: sessions.sessionMiddleware,
       trustProxyHops: settings.TRUST_PROXY_HOPS,
     }),
   );

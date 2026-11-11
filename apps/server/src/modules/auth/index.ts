@@ -5,17 +5,26 @@ import { AuthError } from './errors.js';
 import { AuthSessions } from './session.js';
 import type { AuthRepository } from './types.js';
 import { bcryptPasswords, type PasswordHasher } from './services/password.js';
+import { handle } from '../../core/http/error-handler.js';
 
 export { AuthSessions } from './session.js';
 export { AuthSessionStore } from './services/session-store.js';
 export { PrismaAuthRepository } from './services/repository.js';
 export type { AuthRepository, Principal } from './types.js';
 
-const wrap =
-  (fn: RequestHandler): RequestHandler =>
-  (req, res, next) => {
-    Promise.resolve(fn(req, res, next)).catch(next);
-  };
+const requireJson: RequestHandler = (req, _res, next) => {
+  if (!req.is('application/json')) {
+    next(
+      new AuthError(
+        400,
+        'VALIDATION_FAILED',
+        'Content-Type must be application/json',
+      ),
+    );
+    return;
+  }
+  next();
+};
 
 export async function createAuthRouter(options: {
   sessions: AuthSessions;
@@ -27,17 +36,13 @@ export async function createAuthRouter(options: {
   const passwords = options.passwords ?? bcryptPasswords();
   const dummyHash = await passwords.hash('dummy-password-for-auth-timing');
   const router = Router();
-  router.use((_req, res, next) => {
-    res.setHeader('Cache-Control', 'no-store');
-    next();
-  });
-  router.use(sessions.sessionMiddleware);
   const digest = (value: string) =>
     createHmac('sha256', options.rateLimitSecret).update(value).digest('hex');
 
   router.post(
     '/register',
-    wrap(async (req, res) => {
+    requireJson,
+    handle(async (req, res) => {
       const input = RegisterRequest.parse(req.body);
       const store = sessions.sessionStore;
       await store.consumeLimit(
@@ -55,27 +60,30 @@ export async function createAuthRouter(options: {
 
   router.post(
     '/login',
-    wrap(async (req, res) => {
+    requireJson,
+    handle(async (req, res) => {
       const input = LoginRequest.parse(req.body);
       const store = sessions.sessionStore;
       await store.consumeLimit(
-        [
-          `${store.keyPrefix}:rl:login:ip:${digest(req.ip ?? 'unknown')}`,
-          `${store.keyPrefix}:rl:login:account:${digest(input.email)}`,
-        ],
-        [30, 5],
+        [`${store.keyPrefix}:rl:login:ip:${digest(req.ip ?? 'unknown')}`],
+        [30],
       );
+      const accountKey = `${store.keyPrefix}:rl:login:account:${digest(input.email)}`;
+      const failures = await store.checkLoginFailures(accountKey);
       const user = await repository.findByEmail(input.email);
       const valid = await passwords.verify(
         input.password,
         user?.passwordHash ?? dummyHash,
       );
-      if (!user || !valid)
+      if (!user || !valid) {
+        await store.consumeLimit([accountKey], [5]);
         throw new AuthError(
           401,
           'AUTH_INVALID_CREDENTIALS',
           'Invalid email or password',
         );
+      }
+      await store.resetLoginFailures(accountKey, failures);
       await sessions.establish(req, user);
       res.json({
         data: AuthUser.parse(user),
@@ -86,7 +94,7 @@ export async function createAuthRouter(options: {
   router.get(
     '/me',
     sessions.requireUser,
-    wrap(async (req, res) => {
+    handle(async (req, res) => {
       const user = await repository.findById(req.principal!.userId);
       if (!user) {
         await sessions.logout(req, res);
@@ -111,7 +119,7 @@ export async function createAuthRouter(options: {
   router.post(
     '/logout',
     sessions.requireUser,
-    wrap(async (req, res) => {
+    handle(async (req, res) => {
       await sessions.logout(req, res);
       res.status(204).end();
     }),

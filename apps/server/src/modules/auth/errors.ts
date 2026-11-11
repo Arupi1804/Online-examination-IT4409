@@ -1,12 +1,4 @@
-import type { ApiError } from '@online-exam/shared';
+import { HttpError } from '../../core/errors/http-error.js';
 
-export class AuthError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly details?: ApiError['details'],
-  ) {
-    super(message);
-  }
-}
+// Retain Auth-specific instanceof checks for session cleanup and Socket.IO.
+export class AuthError extends HttpError {}

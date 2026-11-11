@@ -36,6 +36,17 @@ for i,key in ipairs(KEYS) do
  if count>tonumber(ARGV[i+1]) then blocked=1 end
 end
 return blocked`;
+// Read the value and its fixed-window identity together before checking a password.
+const LOGIN_FAILURES = `
+return {tonumber(redis.call('GET',KEYS[1]) or '0'),redis.call('PEXPIRETIME',KEYS[1])}`;
+const RESET_LOGIN_FAILURES = `
+if redis.call('GET',KEYS[1])==ARGV[1]
+ and redis.call('PEXPIRETIME',KEYS[1])==tonumber(ARGV[2]) then
+ return redis.call('DEL',KEYS[1])
+end
+return 0`;
+
+type LoginFailures = { count: number; expiresAt: number };
 
 export class AuthSessionStore extends RedisStore {
   readonly sessionPrefix: string;
@@ -133,5 +144,30 @@ export class AuthSessionStore extends RedisStore {
         'RATE_LIMITED',
         'Too many attempts; try again later',
       );
+  }
+
+  async checkLoginFailures(key: string): Promise<LoginFailures> {
+    const [count, expiresAt] = (await this.redis.eval(LOGIN_FAILURES, {
+      keys: [key],
+      arguments: [],
+    })) as [number, number];
+    if (count >= 5)
+      throw new AuthError(
+        429,
+        'RATE_LIMITED',
+        'Too many attempts; try again later',
+      );
+    return { count, expiresAt };
+  }
+
+  async resetLoginFailures(
+    key: string,
+    observed: LoginFailures,
+  ): Promise<void> {
+    // Do not erase failures recorded during verification or a newer window.
+    await this.redis.eval(RESET_LOGIN_FAILURES, {
+      keys: [key],
+      arguments: [String(observed.count), String(observed.expiresAt)],
+    });
   }
 }
