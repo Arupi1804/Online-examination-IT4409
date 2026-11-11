@@ -17,18 +17,22 @@ Không có bước `/auth/csrf`, không có `csrfToken` trong response và khôn
 - LoginInput yêu cầu email đúng định dạng và password là string, không tự thêm minLength/maxLength ngoài OpenAPI. Password sai (kể cả chuỗi rỗng) trả 401 `AUTH_INVALID_CREDENTIALS` thay vì lỗi validation. Email được lưu/tra cứu lowercase; không trim hoặc đổi chữ password.
 - Register 400 `VALIDATION_FAILED`, 409 `EMAIL_TAKEN`, 429 `RATE_LIMITED`. Login 400 `VALIDATION_FAILED`, 401 `AUTH_INVALID_CREDENTIALS`, 429 `RATE_LIMITED`.
 - `/auth/me` và `/auth/logout` trả 401 `AUTH_SESSION_EXPIRED` hoặc `AUTH_SESSION_REPLACED` khi phiên không hợp lệ.
-- Login sai email/password dùng cùng mã lỗi. Rate limit 15 phút: 30 lần/IP, 5 lần/email chuẩn hóa; đăng ký 20 lần/IP. Redis key chứa digest HMAC thay cho email/IP. 429 có `Retry-After: 900`.
+- Login sai email/password dùng cùng mã lỗi. Giới hạn IP: 30 request đăng nhập/15 phút, tính cả đúng và sai, kiểm tra trước DB/bcrypt; login thành công không reset counter IP.
+- Giới hạn tài khoản: 5 lần đăng nhập sai trong cửa sổ 15 phút từ lần sai đầu tiên. Khi đủ 5 lần sai, request tiếp theo trả 429 trước DB/bcrypt, kể cả mật khẩu đúng, đến khi cửa sổ hết hạn. Request bị chặn không kéo dài TTL. Login thành công trước ngưỡng xóa counter sai nếu giá trị/cửa sổ không thay đổi trong lúc xác minh; không xóa lỗi sai đồng thời hoặc counter thuộc cửa sổ mới.
+- Đăng ký giới hạn 20 request hợp lệ về cấu trúc/IP/15 phút, tính cả email trùng. Redis key chứa digest HMAC thay cho email/IP. 429 có `Retry-After: 900` (giới hạn trên của thời gian chờ).
 
 ## Bảo vệ request và mật khẩu
 
 Client browser gửi JSON và `credentials: 'include'`; Origin được browser tự đặt. Server từ chối nguồn Origin/Referer khác `CLIENT_ORIGIN`, Fetch Metadata báo cross-site hoặc có Fetch Metadata nhưng không xác định được nguồn. Login/register không nhận form/text payload; yêu cầu `Content-Type: application/json`. Cookie giữ SameSite=Lax. Vi phạm nguồn request bị từ chối với 403 `FORBIDDEN`; không dùng mã CSRF_INVALID hoặc yêu cầu token ngoài contract. Native API clients có thể không gửi Origin/Referer/Fetch Metadata.
+
+`http://localhost:5173` và `http://127.0.0.1:5173` là hai Origin khác nhau. Local mặc định dùng localhost như `.env.example`; frontend phải mở đúng Origin được cấu hình. Playwright dùng localhost và đặt `CLIENT_ORIGIN=http://localhost:5173` cho dev server do nó khởi động. Nếu tái sử dụng dev server đã chạy sẵn, cấu hình của server đó cũng phải khớp. Không bỏ kiểm tra Origin hoặc mở wildcard để giải quyết sai cấu hình.
 
 Mật khẩu thông thường tiếp tục dùng bcrypt cost 12, tương thích hash đã có và seed bcrypt của TV2. OpenAPI giới hạn ký tự, không giới hạn UTF-8 bytes: password Unicode hợp lệ dài hơn 72 bytes được SHA-256/base64 trước bcrypt và lưu với prefix `bcrypt-sha256$`. Verify phân biệt prefix để không cắt mất đuôi Unicode; hash bcrypt cũ vẫn đăng nhập bình thường. Không thay đổi schema DB, không rehash hàng loạt tài khoản.
 
 ## Session và single-session
 
 - Cookie `connect.sid`, signed bằng `SESSION_SECRET` tối thiểu 32 ký tự; httpOnly, sameSite=lax, path=/, không đặt Domain.
-- Idle TTL 28.800 giây (8 giờ). HTTP hợp lệ gia hạn cookie, session và active pointer. Socket handshake/event không gia hạn cookie hoặc Redis TTL.
+- Idle TTL 28.800 giây (8 giờ). HTTP hợp lệ đi qua session middleware gia hạn cookie, session và active pointer. Health công khai không chạy middleware này và không gia hạn phiên. Socket handshake/event không gia hạn cookie hoặc Redis TTL.
 - Local HTTP: `APP_ENV=dev`, `COOKIE_SECURE=false`. Staging/prod bắt buộc HTTPS và `COOKIE_SECURE=true`. `TRUST_PROXY_HOPS=1` chỉ khi đứng sau đúng một proxy tin cậy; mặc định 0. Không tin X-Forwarded-For từ client tùy ý.
 - Prefix `P=oe:<APP_ENV>:v1`. Session `P:sess:<sid>` có `cookie`, `userId`, `role`; các trường Auth ở cấp cao nhất để TV3 đọc.
 - Pointer `P:auth:user:<userId>:active_session` chứa sid hợp lệ. Lua tạo session mới và thay pointer nguyên tử, xóa session cũ; chỉ chấp nhận session trùng pointer.
@@ -41,11 +45,15 @@ Mật khẩu thông thường tiếp tục dùng bcrypt cost 12, tương thích 
 
 Auth xuất `AuthSessions` và `AuthRepository`. Bootstrap dùng `PrismaAuthRepository`; model ánh xạ SQL hiện có trong `apps/server/prisma/schema.prisma`. `prisma generate` không thay đổi database. Không chạy `db push`, `migrate dev`, `migrate reset` từ schema này trước khi TV2 baseline đầy đủ: SQL còn có CHECK và partial indexes Prisma không biểu diễn trong schema.
 
-Mount `sessions.sessionMiddleware` trước route nghiệp vụ, sau đó `sessions.requireUser` hoặc `sessions.requireRoles('TEACHER')`. Middleware kiểm tra Origin/Referer và Fetch Metadata trên method thay đổi dữ liệu; không yêu cầu CSRF token header. `req.principal = {id,userId,role,sid}`; role check không thay thế kiểm tra chủ sở hữu exam/attempt ở service.
+`createApp` nhận `sessionMiddleware`, `authRouter` và `apiRouter` (router nghiệp vụ tùy chọn). Bootstrap truyền `sessions.sessionMiddleware` để mount đúng một lần tại `/api/v1`, trước Auth và router nghiệp vụ; Auth router không tự mount session nữa. Khi truyền router mà thiếu session middleware, bootstrap báo lỗi thay vì chạy route chưa được bảo vệ. `/api/v1/health` được đăng ký trước session middleware nên vẫn công khai, kể cả cookie bị thu hồi.
+
+TV2 gắn `sessions.requireUser` hoặc `sessions.requireRoles('TEACHER')` tại route bên trong `apiRouter`. Shared middleware kiểm tra Origin/Referer và Fetch Metadata trên method thay đổi dữ liệu; không yêu cầu CSRF token header. `req.principal = {id,userId,role,sid}`; role check không thay thế kiểm tra chủ sở hữu exam/attempt ở service. Login/register tự kiểm tra JSON ở route nên không phụ thuộc `req.path` của điểm mount chung.
+
+Lỗi nghiệp vụ dùng `HttpError` tại `src/core/errors/http-error.ts`, đi qua `handleError` chung tại `src/core/http/error-handler.ts`; async Express 4 handler dùng `handle`. `AuthError` kế thừa `HttpError`, giữ các kiểm tra riêng của session/Socket.IO. Envelope, Zod/JSON validation, thông tin `details`, bảo vệ lỗi nội bộ và `Retry-After` của Auth vẫn được giữ. Không tạo thêm error handler hoặc loại lỗi HTTP trùng trong module Core.
 
 ## Bàn giao cho TV3
 
-Chỉ tạo một Socket.IO Server trên HTTP server chung. Bootstrap trên dev đã tạo namespace `/exam` và gắn Auth; TV3 bổ sung handler vào namespace này, không tạo Server thứ hai hoặc đăng ký event vào `/`.
+Chỉ tạo một Socket.IO Server trên HTTP server chung. Bootstrap của nhánh Auth đã tạo namespace `/exam` và gắn Auth; TV3 bổ sung handler vào namespace này khi tích hợp, không tạo Server thứ hai hoặc đăng ký event vào `/`.
 
 - `sessions.sessionStore`: cùng instance Redis store với HTTP.
 - `sessions.socketSessionMiddleware`: đọc cookie đã ký/session ở Engine.IO handshake, không ghi cookie/TTL. Khác HTTP middleware ở hành vi gia hạn; cùng secret/store/identity.
