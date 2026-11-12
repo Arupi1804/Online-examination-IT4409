@@ -15,7 +15,7 @@ Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn
 | Tham số v1               |        Giá trị | Ý nghĩa                                           |
 | ------------------------ | -------------: | ------------------------------------------------- |
 | `SESSION_IDLE_TTL_SEC`   |  28800 (8 giờ) | Session và con trỏ phiên; cookie có cùng thời hạn |
-| `LOGIN_WINDOW_SEC`       |  900 (15 phút) | Cửa sổ giới hạn đăng nhập                         |
+| `LOGIN_WINDOW_SEC`       |  900 (15 phút) | Cửa sổ giới hạn đăng nhập/đăng ký                 |
 | `WS_WINDOW_SEC`          |             60 | Cửa sổ giới hạn event Socket.IO                   |
 | `HEARTBEAT_INTERVAL_SEC` |           5–10 | Chu kỳ client gửi `proctor:heartbeat`             |
 | `OFFLINE_AFTER_SEC`      |             30 | Ngưỡng đánh dấu offline                           |
@@ -25,14 +25,15 @@ Contract cho các key Redis của dự án trên Redis 7. PostgreSQL là nguồn
 
 ## 2. Danh mục key do ứng dụng quản lý
 
-`sid` là ID session chỉ phía server dùng. `digest` là HMAC-SHA256 hex của IP hoặc email đã chuẩn hóa (email: `trim` và lowercase), dùng secret riêng của server. IP phải lấy sau khi cấu hình đúng proxy tin cậy; không tin trực tiếp header do client tự đặt.
+`sid` là ID session chỉ phía server dùng. `digest` là HMAC-SHA256 hex của IP hoặc email đã chuẩn hóa (email đúng định dạng rồi lowercase, không trim), dùng secret riêng của server. IP phải lấy sau khi cấu hình đúng proxy tin cậy; không tin trực tiếp header do client tự đặt.
 
 | Key pattern                           | Redis type / value                                      | Bên ghi | TTL                                                                              | Mục đích / nguồn khôi phục                                                                                   |
 | ------------------------------------- | ------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `P:sess:<sid>`                        | String; session đã serialize theo Redis store           | #1      | 8 giờ idle, gia hạn theo hoạt động hợp lệ                                        | Session của `express-session`; hết hạn thì đăng nhập lại. Store phải dùng prefix `P:sess:`.                  |
 | `P:auth:user:<userId>:active_session` | String; `sid` được chấp nhận                            | #1      | Bằng TTL session, làm mới cùng session                                           | Single-session; handshake/event nhạy cảm so khớp `sid`.                                                      |
-| `P:rl:login:ip:<digest>`              | String; bộ đếm                                          | #1      | 15 phút từ lần thử đầu                                                           | Mặc định 30 lần/15 phút/IP.                                                                                  |
-| `P:rl:login:account:<digest>`         | String; bộ đếm                                          | #1      | 15 phút từ lần thử đầu                                                           | Mặc định 5 lần/15 phút/email.                                                                                |
+| `P:rl:login:ip:<digest>`              | String; bộ đếm request đăng nhập                        | #1      | 15 phút từ request đầu                                                           | 30 request/15 phút/IP, tính cả đúng và sai; không reset khi login thành công.                                |
+| `P:rl:login:account:<digest>`         | String; bộ đếm đăng nhập sai                            | #1      | 15 phút từ lần sai đầu                                                           | 5 lần sai/email; đủ ngưỡng thì chặn request tiếp theo đến hết cửa sổ. Login thành công reset có điều kiện.   |
+| `P:rl:register:ip:<digest>`           | String; bộ đếm request đăng ký                          | #1      | 15 phút từ request đầu                                                           | 20 request hợp lệ về cấu trúc/15 phút/IP, tính cả email trùng.                                               |
 | `P:rl:ws:<userId>:<eventSlug>`        | String; bộ đếm                                          | #3      | 60 giây từ event đầu                                                             | `eventSlug` thay `:` bằng `_`; giới hạn ở mục 4.                                                             |
 | `P:exam:<examId>:runtime`             | Hash; `status`, `startTimeMs`, `endTimeMs`              | #3      | DRAFT/SCHEDULED: 1 giờ từ lần đọc; RUNNING: tới `endTime + 24 giờ`; ENDED: 1 giờ | Cache từ `exams.status`, `start_time`, `end_time`; cache miss thì nạp lại DB.                                |
 | `P:exam:<examId>:presence`            | Sorted Set; member `attemptId`, score `lastHeartbeatMs` | #3      | Tới `endTime + 1 giờ`, cập nhật khi gia hạn                                      | Online/offline; cache miss thì chờ heartbeat mới.                                                            |
@@ -78,12 +79,17 @@ Counter dùng cửa sổ cố định; TTL đặt một lần khi tăng từ 0 l
 | --------------------------------------------------- | ------------------------------------ | ----------------: |
 | Login theo tài khoản                                | `P:rl:login:account:<digest>`        |       5 / 15 phút |
 | Login theo IP                                       | `P:rl:login:ip:<digest>`             |      30 / 15 phút |
+| Đăng ký theo IP                                     | `P:rl:register:ip:<digest>`          |      20 / 15 phút |
 | `proctor:heartbeat`                                 | `P:rl:ws:<userId>:proctor_heartbeat` |         20 / phút |
 | `proctor:violation`                                 | `P:rl:ws:<userId>:proctor_violation` |         30 / phút |
 | `room:join`, `attempt:rejoin`                       | `P:rl:ws:<userId>:<eventSlug>`       | 20 / phút / event |
 | `exam:start`, `exam:extend`, `attempt:force_submit` | `P:rl:ws:<userId>:<eventSlug>`       | 10 / phút / event |
 
-REST trả HTTP 429 khi vượt giới hạn; Socket.IO trả ACK lỗi theo `docs/ws-events.md`. Rate limit không thay thế xác thực session và kiểm tra quyền trên `examId`/`attemptId`.
+Login kiểm tra counter IP cho mọi request hợp lệ về cấu trúc trước DB/bcrypt. Counter tài khoản chỉ tăng khi sai email/password; đủ 5 lần sai thì các request tiếp theo bị chặn trước DB/bcrypt, kể cả mật khẩu đúng. Login thành công reset counter tài khoản bằng Lua chỉ khi giá trị và thời điểm hết hạn vẫn khớp snapshot trước xác minh, để không xóa lỗi sai đồng thời hoặc cửa sổ mới. Counter IP không bị reset. Request bị chặn tại bước kiểm tra trước xác minh không tăng counter tài khoản; các request sai đã qua bước kiểm tra và đang xác minh đồng thời vẫn được ghi nhận khi hoàn thành. Không gia hạn TTL sau lần sai đầu.
+
+Key vẫn là String integer như trước. Khi cập nhật từ bản đếm mọi login, counter tài khoản cũ còn tồn tại được giữ đến hết TTL hiện có (tối đa cửa sổ 15 phút); không reset hàng loạt Redis hoặc session để triển khai thay đổi chính sách này.
+
+REST trả HTTP 429 khi vượt giới hạn, Auth trả `Retry-After: 900` (giới hạn trên); Socket.IO trả ACK lỗi theo `docs/ws-events.md`. Rate limit không thay thế xác thực session và kiểm tra quyền trên `examId`/`attemptId`.
 
 ## 5. Auto-submit, gia hạn và thời gian nộp
 
