@@ -9,3 +9,7 @@ coverage/
 *.tsbuildinfo
 .vite/
 apps/server/uploads/
+# Local document extraction and UI verification tools.
+/tmp/
+test-results/
+playwright-report/
