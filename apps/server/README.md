@@ -27,7 +27,7 @@ await realtime.gateway.emitStudentUpdate(attemptId);
 realtime.close();
 ```
 
-Session lưu `userId` và `role` ở cấp cao nhất. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Realtime dùng cùng Prisma và Redis client của Auth. Repository thao tác dữ liệu bằng Prisma; tiện ích đồng hồ tại `src/core/db/clock.ts` đọc `now()` qua Prisma để giữ thời gian PostgreSQL cho deadline và thời điểm nộp bài. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
+Session lưu `userId` và `role` ở cấp cao nhất. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Realtime dùng cùng Prisma và Redis client của Auth. Repository thao tác dữ liệu bằng Prisma; `src/core/db/clock.ts` đọc đồng hồ PostgreSQL và `src/core/db/locks.ts` giữ khóa hàng khi chốt bài, đều qua Prisma transaction. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
 
 Lệnh ở workspace root: `pnpm install`, `pnpm check`, `pnpm test`, `pnpm build`. Chi tiết event và ACK ở [WebSocket contract](../../docs/ws-events.md).
 Backend Express + Socket.IO. Module Realtime tuân thủ `docs/ws-events.md`; không tạo Socket.IO server độc lập ngoài gateway chung.

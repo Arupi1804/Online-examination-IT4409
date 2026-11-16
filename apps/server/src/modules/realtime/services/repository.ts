@@ -17,6 +17,11 @@ import type {
   ViolationType,
 } from '../../../shared/realtime.js';
 import { databaseNow } from '../../../core/db/clock.js';
+import {
+  lockAttempt,
+  lockExpiredExam,
+  lockOpenAttempts,
+} from '../../../core/db/locks.js';
 import { RealtimeError } from '../errors.js';
 
 export type Principal = { userId: string; role: Role; sid: string };
@@ -430,6 +435,7 @@ export class RealtimeRepository {
     principal: Principal,
   ): Promise<Submitted | null> {
     return this.serializable(async (tx) => {
+      await lockAttempt(tx, attemptId);
       const row = await tx.attempt.findUnique({
         where: { id: attemptId },
         include: { exam: true },
@@ -447,15 +453,10 @@ export class RealtimeRepository {
     examId: string,
   ): Promise<{ exam: Exam; submissions: Submitted[]; ended: boolean } | null> {
     return this.serializable(async (tx) => {
+      if (!(await lockExpiredExam(tx, examId))) return null;
       const row = await tx.exam.findUnique({ where: { id: examId } });
-      const now = await databaseNow(tx);
-      if (
-        !row ||
-        !row.endTime ||
-        row.endTime.getTime() + 5000 >= now.getTime() ||
-        !['RUNNING', 'ENDED'].includes(row.status)
-      )
-        return null;
+      if (!row || !['RUNNING', 'ENDED'].includes(row.status)) return null;
+      await lockOpenAttempts(tx, examId);
       const attempts = await tx.attempt.findMany({
         where: { examId, status: 'IN_PROGRESS' },
       });
