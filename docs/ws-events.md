@@ -2,6 +2,10 @@
 
 Socket.IO chạy trên **cùng HTTP server** với Express. Cookie `express-session` được đọc lúc handshake. Session trong Redis phải có `userId` (UUID) và `role` (`ADMIN`, `TEACHER`, `STUDENT`), đồng thời `oe:<env>:v1:auth:user:<userId>:active_session` phải bằng `sessionID`. Mỗi event đọc lại session và con trỏ active; session bị thu hồi sẽ trả ACK lỗi rồi ngắt socket. Client không được tự khai báo `userId`/`role`.
 
+Auth/session được TV1 cung cấp theo [Auth contract](auth-contract.md). TV3 dùng namespace `/exam` trên HTTP server chung và cùng session store; không tạo thêm Socket.IO Server. HTTP middleware gia hạn cookie/session, middleware handshake chỉ đọc và không gia hạn TTL.
+
+Bootstrap hiện đã xác thực session ở handshake và khi nhận event. Các handler nghiệp vụ bên dưới chưa được mount vào namespace `/exam`; đây là contract để tích hợp module realtime với session Auth hiện có.
+
 Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` hoặc `{ "ok": false, "error": { "code": "...", "message": "..." } }`. Các mã lỗi: `UNAUTHENTICATED`, `SESSION_REPLACED`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_PAYLOAD`, `INVALID_STATE`, `RATE_LIMITED`, `INTERNAL_ERROR`. Dữ liệu thời gian là ISO 8601 UTC do server tạo, trừ `clientAt` chỉ dùng làm metadata.
 
 ## Client → server
@@ -29,18 +33,6 @@ Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` h
 | `attempt:submitted`                                         | `user:<userId>`, `monitor:<examId>`  | `Submitted`                                                            |
 | `monitor:student_update`                                    | `monitor:<examId>`                   | `StudentUpdate`                                                        |
 | `session:replaced`                                          | Socket của session cũ                | `{reason: "SESSION_REPLACED"}` rồi ngắt kết nối                        |
-| Event                                                       | Chiều                                | Mục đích                                                               |
-| --------------------------------------------                | ----------------------------------   | -------------------------------                                        |
-| `room:join` / `room:state`                                  | Client → Server / Server → Client    | Vào và cập nhật phòng thi                                              |
-| `participant:joined` / `participant:left`                   | Server → Room                        | Thay đổi người tham gia                                                |
-| `exam:start` / `exam:started`                               | Teacher → Server → Room              | Bắt đầu kỳ thi                                                         |
-| `exam:extend` / `exam:extended`                             | Teacher → Server → Room              | Gia hạn thời gian                                                      |
-| `timer:sync` / `exam:ended`                                 | Server → Room                        | Đồng bộ thời gian, kết thúc thi                                        |
-| `attempt:rejoin` / `attempt:state`                          | Student → Server → Student           | Khôi phục bài làm                                                      |
-| `attempt:force_submit` / `attempt:submitted`                | Teacher → Server / Server → Client   | Buộc nộp và thông báo nộp                                              |
-| `proctor:heartbeat` / `proctor:violation`                   | Student → Server                     | Presence và vi phạm                                                    |
-| `monitor:student_update`                                    | Server → Monitor room                | Cập nhật dashboard giám sát                                            |
-| `session:replaced`                                          | Server → Client                      | Thông báo phiên bị thay thế                                            |
 
 `ExamClock = {examId, status, startTime, endTime, serverTime}`. `RoomState` thêm `roomCode`, `participantCount` (số socket đang kết nối) và `monitor?: StudentUpdate[]` chỉ dành cho Teacher/Admin. `AttemptState = {attemptId, examId, status, submittedAt, answers: [{questionId, optionIds}], clock}`. Không có đáp án đúng trong các payload này. `StudentUpdate = {examId, attemptId, userId, online, lastHeartbeat, answeredCount, violationCount, lastViolation, status}`. `Submitted = {examId, attemptId, userId, status, submittedAt}`.
 

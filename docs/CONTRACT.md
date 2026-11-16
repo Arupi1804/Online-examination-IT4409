@@ -16,7 +16,7 @@ Giữ các module nghiệp vụ riêng `questions`, `exams`, `attempts`, `result
 
 - JSON camelCase; DB snake_case; Prisma map trường khi TV2 triển khai.
 - UUID v4; thời gian ISO 8601 UTC; thời lượng giây; điểm làm tròn hai chữ số.
-- Mã phòng sáu ký tự theo `^[A-HJ-NP-Z2-9]{6}$`. Ví dụ hợp lệ `K7M2QX`;Không hợp lệ `DEMO01`.
+- Mã phòng sáu ký tự theo `^[A-HJ-NP-Z2-9]{6}$`. Ví dụ hợp lệ `K7M2QX`; không hợp lệ `DEMO01`.
 - REST `/api/v1`; cookie session httpOnly; client gửi `credentials: 'include'`.
 - Thành công `{ data, meta? }`; lỗi `{ error: { code, message, details? } }`; danh sách dùng `page`, `pageSize`, `total`.
 - HTTP: 200/201/204, 400/401/403/404/409/422/429; lỗi nội bộ 500 không lộ thông tin.
@@ -42,9 +42,9 @@ CODEOWNERS hiện là mẫu: thay handle thật và bật branch protection trê
 
 ## Phần tiếp tục bàn giao
 
-- TV1: Auth/session Redis, single-session, CSRF/rate limit, HTTPS staging.
+- TV1: Auth/session Redis, single-session và CSRF/rate limit theo `auth-contract.md`; tiếp tục HTTPS staging và tích hợp quản trị tài khoản.
 - TV2: hoàn thiện OpenAPI cho endpoint PDF, Prisma baseline từ SQL hiện có, seed và API nghiệp vụ. Chưa chạy Prisma migration lên DB có sẵn.
-- TV3: điền payload/ACK/quyền của từng event, mock và logic realtime. Gateway hiện từ chối handshake để không mở kết nối chưa xác thực.
+- TV3: tích hợp handler realtime vào namespace `/exam` và session Auth hiện có theo `auth-contract.md`; duy trì mock và logic realtime. Bootstrap hiện mới gắn xác thực Socket.IO, chưa mount các handler realtime.
 - TV4/TV5: UI, mock API, route và E2E nghiệp vụ; không tạo type/event trùng shared.
 
-Definition of Done: lint/type-check/test/build thành công, chạy được bằng Compose, đúng contract, cập nhật tài liệu và có review. z
+Definition of Done: lint/type-check/test/build thành công, chạy được bằng Compose, đúng contract, cập nhật tài liệu và có review.
