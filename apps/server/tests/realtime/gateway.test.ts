@@ -1,23 +1,32 @@
 /* KIỂM THỬ TÍCH HỢP SOCKET.IO GATEWAY (NODE TEST RUNNER) */
 
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { createHmac } from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import { afterEach, test } from 'node:test';
-import type { RequestHandler } from 'express';
-import { Store } from 'express-session';
+import type { NextFunction } from 'express';
+import { Store, type SessionData } from 'express-session';
+import { Server } from 'socket.io';
 import { io as clientIo, type Socket as ClientSocket } from 'socket.io-client';
+import { AUTH, WS_NAMESPACE } from '@online-exam/shared';
+import { AuthSessions } from '../../src/modules/auth/session.js';
+import type { AuthSessionStore } from '../../src/modules/auth/services/session-store.js';
 import { createRealtimeGateway } from '../../src/modules/realtime/handlers/gateway.js';
 import { RealtimeError } from '../../src/modules/realtime/errors.js';
 import type { RealtimeService } from '../../src/modules/realtime/services/service.js';
 
-// Store giả lập thay Redis session, đủ 3 method get/set/destroy cho bài test
+// Store giả lập cho AuthSessions; gateway không tự đọc cookie hay session.
 class MemoryStore extends Store {
-  sessions = new Map<string, { userId: string; role: string }>();
+  sessions = new Map<string, SessionData>();
   override get(
     sid: string,
-    callback: (err: unknown, session?: never) => void,
+    callback: (err: unknown, session?: SessionData | null) => void,
   ): void {
-    callback(null, this.sessions.get(sid) as never);
+    callback(null, this.sessions.get(sid) ?? null);
   }
   override set(
     _sid: string,
@@ -42,18 +51,38 @@ afterEach(async () => {
 async function fixture() {
   const httpServer = createServer();
   const store = new MemoryStore();
+  const secret = 'realtime-test-secret-with-at-least-32-characters';
+  const expires = new Date(Date.now() + 3_600_000);
   store.sessions.set('teacher', {
     userId: '11111111-1111-4111-8111-111111111111',
     role: 'TEACHER',
-  });
+    cookie: { expires },
+  } as SessionData);
   store.sessions.set('student', {
     userId: '22222222-2222-4222-8222-222222222222',
     role: 'STUDENT',
-  });
+    cookie: { expires },
+  } as SessionData);
   const active = new Map<string, string>([
     ['11111111-1111-4111-8111-111111111111', 'teacher'],
     ['22222222-2222-4222-8222-222222222222', 'student'],
   ]);
+  const authStore = Object.assign(store, {
+    redis: {
+      get: async (key: string) => {
+        const userId = key.match(/:auth:user:([^:]+):active_session$/)?.[1];
+        return userId ? (active.get(userId) ?? null) : null;
+      },
+    },
+    activeKey: (userId: string) =>
+      `oe:dev:v1:auth:user:${userId}:active_session`,
+  }) as unknown as AuthSessionStore;
+  const sessions = new AuthSessions({
+    store: authStore,
+    secret,
+    clientOrigin: 'http://localhost:5173',
+    secureCookie: false,
+  });
   const calls: string[] = [];
   const examId = '33333333-3333-4333-8333-333333333333';
   const attemptId = '44444444-4444-4444-8444-444444444444';
@@ -66,10 +95,6 @@ async function fixture() {
   };
   const service = {
     cache: {
-      assertActiveSession: async (userId: string, sid: string) => {
-        if (active.get(userId) !== sid)
-          throw new RealtimeError('SESSION_REPLACED', 'Session replaced');
-      },
       rateLimit: async () => {},
       removePresence: async () => {},
     },
@@ -101,17 +126,20 @@ async function fixture() {
       };
     },
   } as unknown as RealtimeService;
-  const sessionMiddleware: RequestHandler = (req, _res, next) => {
-    (req as typeof req & { sessionID: string }).sessionID =
-      req.headers.cookie?.replace('sid=', '') ?? '';
-    next();
-  };
+  const io = new Server(httpServer);
+  io.engine.use(
+    (req: IncomingMessage, res: ServerResponse, next: NextFunction) =>
+      sessions.socketSessionMiddleware(
+        req as Parameters<typeof sessions.socketSessionMiddleware>[0],
+        res as Parameters<typeof sessions.socketSessionMiddleware>[1],
+        next,
+      ),
+  );
+  const namespace = io.of(WS_NAMESPACE);
   const gateway = createRealtimeGateway({
-    httpServer,
-    sessionMiddleware,
-    sessionStore: store,
+    namespace,
+    sessions,
     service,
-    clientOrigin: 'http://localhost:5173',
   });
   await new Promise<void>((resolve) =>
     httpServer.listen(0, '127.0.0.1', resolve),
@@ -120,15 +148,26 @@ async function fixture() {
   if (!address || typeof address === 'string') throw new Error('Missing port');
   const url = `http://127.0.0.1:${address.port}`;
   cleanup.push(async () => {
-    await gateway.close();
+    gateway.close();
+    await new Promise<void>((resolve) => io.close(() => resolve()));
     if (httpServer.listening)
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
-  function connect(sid: string): ClientSocket {
-    const socket = clientIo(url, {
+  function connect(sid?: string): ClientSocket {
+    const signature = sid
+      ? createHmac('sha256', secret)
+          .update(sid)
+          .digest('base64')
+          .replace(/=+$/, '')
+      : undefined;
+    const cookie = sid
+      ? `${AUTH.COOKIE_NAME}=${encodeURIComponent(`s:${sid}.${signature}`)}`
+      : undefined;
+    const socket = clientIo(`${url}${WS_NAMESPACE}`, {
       transports: ['websocket'],
-      extraHeaders: { cookie: `sid=${sid}` },
+      extraHeaders: cookie ? { cookie } : {},
       reconnection: false,
+      forceNew: true,
     });
     sockets.push(socket);
     return socket;
@@ -147,17 +186,17 @@ function connected(socket: ClientSocket): Promise<void> {
 // Case 1: không có session hoặc session đã bị thay thế phải thất bại ngay handshake
 test('handshake rejects missing or inactive session', async () => {
   const f = await fixture();
-  const unknown = f.connect('missing');
+  const unknown = f.connect();
   const error = await new Promise<Error & { data?: { code: string } }>(
     (resolve) => unknown.once('connect_error', resolve),
   );
-  assert.equal(error.data?.code, 'UNAUTHENTICATED');
+  assert.equal(error.data?.code, 'AUTH_SESSION_EXPIRED');
   f.active.set('22222222-2222-4222-8222-222222222222', 'new-session');
   const replaced = f.connect('student');
   const replacedError = await new Promise<Error & { data?: { code: string } }>(
     (resolve) => replaced.once('connect_error', resolve),
   );
-  assert.equal(replacedError.data?.code, 'SESSION_REPLACED');
+  assert.equal(replacedError.data?.code, 'AUTH_SESSION_REPLACED');
 });
 
 // Case 2: join phòng, phân quyền start, nhận broadcast, rejoin và hủy phiên giữa kết nối
@@ -192,7 +231,7 @@ test('room join, role check, rejoin and live session revocation', async () => {
     student.once('session:replaced', resolve),
   );
   const refused = await student.emitWithAck('room:join', { examId: f.examId });
-  assert.equal(refused.error.code, 'SESSION_REPLACED');
-  assert.deepEqual(await replaced, { reason: 'SESSION_REPLACED' });
+  assert.equal(refused.error.code, 'AUTH_SESSION_REPLACED');
+  assert.deepEqual(await replaced, {});
   assert.equal(f.calls.filter((x) => x === 'start').length, 1);
 });

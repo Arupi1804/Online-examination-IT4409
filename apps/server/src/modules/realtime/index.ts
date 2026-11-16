@@ -6,11 +6,10 @@ export { RealtimeRedis } from './services/redis.js';
 export { RealtimeService } from './services/service.js';
 export { RealtimeWorker } from './jobs/worker.js';
 
-import type { Server as HttpServer } from 'node:http';
-import type { RequestHandler } from 'express';
-import type { Store } from 'express-session';
-import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
+import type { Namespace } from 'socket.io';
+import type { AuthSessions } from '../auth/session.js';
+import type { AuthRedis } from '../auth/services/session-store.js';
 import { createRealtimeGateway } from './handlers/gateway.js';
 import { RealtimeRepository } from './services/repository.js';
 import { RealtimeRedis } from './services/redis.js';
@@ -19,12 +18,10 @@ import { RealtimeWorker } from './jobs/worker.js';
 
 // Hàm gắn toàn bộ module vào server đang chạy; tạo instance và khởi động worker
 export async function mountRealtime(options: {
-  httpServer: HttpServer;
-  sessionMiddleware: RequestHandler;
-  sessionStore: Store;
+  namespace: Namespace;
+  sessions: AuthSessions;
   pool: Pool;
-  redis: Redis;
-  clientOrigin: string;
+  redis: AuthRedis;
   environment: 'dev' | 'staging' | 'prod';
   logger?: Pick<Console, 'error'>;
 }) {
@@ -42,15 +39,16 @@ export async function mountRealtime(options: {
   try {
     await worker.start();
   } catch (error) {
-    await gateway.close();
+    worker.stop();
+    gateway.close();
     throw error;
   }
   return {
     gateway,
     worker,
-    async close() {
+    close() {
       worker.stop();
-      await gateway.close();
+      gateway.close();
     },
   };
 }

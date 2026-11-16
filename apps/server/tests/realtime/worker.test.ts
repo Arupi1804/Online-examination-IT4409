@@ -48,7 +48,7 @@ test('recovered overdue exam submits once and emits ended after commit', async (
     },
   } as unknown as RealtimeService;
   const gateway = {
-    io: { to: () => ({ emit: (event: string) => emitted.push(event) }) },
+    namespace: { to: () => ({ emit: (event: string) => emitted.push(event) }) },
     emitSubmitted: () => emitted.push('attempt:submitted'),
     emitStudentUpdate: async () => {
       emitted.push('monitor:student_update');

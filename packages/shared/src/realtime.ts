@@ -39,13 +39,14 @@ export type ViolationType =
   | 'COPY_PASTE'
   | 'DISCONNECT';
 export type RealtimeErrorCode =
-  | 'UNAUTHENTICATED'
-  | 'SESSION_REPLACED'
+  | 'AUTH_SESSION_EXPIRED'
+  | 'AUTH_SESSION_REPLACED'
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'INVALID_PAYLOAD'
   | 'INVALID_STATE'
   | 'RATE_LIMITED'
+  | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 export type Ack<T> =

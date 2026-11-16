@@ -81,7 +81,7 @@ export class RealtimeWorker {
       }
     }
     if (result.ended)
-      this.gateway.io
+      this.gateway.namespace
         .to(`exam:${examId}`)
         .emit(serverEvents.examEnded, clock(result.exam));
   }
@@ -106,7 +106,7 @@ export class RealtimeWorker {
       for (const exam of running) {
         if (!exam.end_time || exam.end_time.getTime() <= now) continue;
         if (now - this.lastSync >= 10_000)
-          this.gateway.io
+          this.gateway.namespace
             .to(`exam:${exam.id}`)
             .emit(serverEvents.timerSync, clock(exam));
         for (const id of await this.service.cache.offlineCandidates(

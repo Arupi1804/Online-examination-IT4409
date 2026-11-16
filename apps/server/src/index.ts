@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
 import type { NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
 import { z } from 'zod';
@@ -19,6 +20,7 @@ import {
   createAuthRouter,
   PrismaAuthRepository,
 } from './modules/auth/index.js';
+import { mountRealtime } from './modules/realtime/index.js';
 
 config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
 const env = z
@@ -58,11 +60,15 @@ const redis = createClient({
 });
 redis.on('error', () => console.error('Redis connection unavailable'));
 let io: Server | undefined;
+let pool: Pool | undefined;
+let realtime: Awaited<ReturnType<typeof mountRealtime>> | undefined;
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  realtime?.close();
   if (io) await new Promise<void>((resolve) => io!.close(() => resolve()));
+  if (pool) await pool.end();
   await prisma.$disconnect();
   if (redis.isOpen) await redis.quit();
 }
@@ -90,6 +96,8 @@ try {
   );
   io = new Server(server, {
     cors: { origin: settings.CLIENT_ORIGIN, credentials: true },
+    maxHttpBufferSize: 16_384,
+    connectionStateRecovery: { skipMiddlewares: false },
   });
   io.engine.use(
     (req: IncomingMessage, res: ServerResponse, next: NextFunction) => {
@@ -104,7 +112,18 @@ try {
       );
     },
   );
-  sessions.attachSocketAuthentication(io.of(WS_NAMESPACE));
+  pool = new Pool({
+    connectionString: settings.DATABASE_URL,
+    connectionTimeoutMillis: 5000,
+  });
+  pool.on('error', () => console.error('PostgreSQL pool unavailable'));
+  realtime = await mountRealtime({
+    namespace: io.of(WS_NAMESPACE),
+    sessions,
+    pool,
+    redis,
+    environment: settings.APP_ENV,
+  });
   server.on('error', () => {
     console.error('HTTP server could not start');
     void shutdown().finally(() => {
@@ -120,7 +139,7 @@ try {
     });
 } catch {
   console.error(
-    'Auth bootstrap failed; check PostgreSQL, Redis and server configuration',
+    'Server bootstrap failed; check PostgreSQL, Redis and server configuration',
   );
   await shutdown();
   process.exitCode = 1;
