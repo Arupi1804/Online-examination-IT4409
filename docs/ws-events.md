@@ -4,9 +4,9 @@ Socket.IO chạy trên **cùng HTTP server** với Express. Cookie `express-sess
 
 Auth/session được TV1 cung cấp theo [Auth contract](auth-contract.md). TV3 dùng namespace `/exam` trên HTTP server chung và cùng session store; không tạo thêm Socket.IO Server. HTTP middleware gia hạn cookie/session, middleware handshake chỉ đọc và không gia hạn TTL.
 
-Bootstrap hiện đã xác thực session ở handshake và khi nhận event. Các handler nghiệp vụ bên dưới chưa được mount vào namespace `/exam`; đây là contract để tích hợp module realtime với session Auth hiện có.
+Bootstrap gắn handler realtime vào namespace `/exam` đã được Auth xác thực ở handshake và trước mỗi event. Auth quản lý việc thu hồi socket và kiểm tra active session.
 
-Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` hoặc `{ "ok": false, "error": { "code": "...", "message": "..." } }`. Các mã lỗi: `UNAUTHENTICATED`, `SESSION_REPLACED`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_PAYLOAD`, `INVALID_STATE`, `RATE_LIMITED`, `INTERNAL_ERROR`. Dữ liệu thời gian là ISO 8601 UTC do server tạo, trừ `clientAt` chỉ dùng làm metadata.
+Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` hoặc `{ "ok": false, "error": { "code": "...", "message": "..." } }`. Auth trả `AUTH_SESSION_EXPIRED` hoặc `AUTH_SESSION_REPLACED` khi session không hợp lệ, `SERVICE_UNAVAILABLE` khi không thể kiểm tra session; handler realtime dùng `FORBIDDEN`, `NOT_FOUND`, `INVALID_PAYLOAD`, `INVALID_STATE`, `RATE_LIMITED`, `INTERNAL_ERROR`. Dữ liệu thời gian là ISO 8601 UTC do server tạo, trừ `clientAt` chỉ dùng làm metadata.
 
 ## Client → server
 
@@ -32,7 +32,7 @@ Các event client gửi đều nhận ACK dạng `{ "ok": true, "data": ... }` h
 | `attempt:state`                                             | Socket vừa rejoin                    | `AttemptState`                                                         |
 | `attempt:submitted`                                         | `user:<userId>`, `monitor:<examId>`  | `Submitted`                                                            |
 | `monitor:student_update`                                    | `monitor:<examId>`                   | `StudentUpdate`                                                        |
-| `session:replaced`                                          | Socket của session cũ                | `{reason: "SESSION_REPLACED"}` rồi ngắt kết nối                        |
+| `session:replaced`                                          | Socket của session cũ                | `{}` rồi ngắt kết nối                                                  |
 
 `ExamClock = {examId, status, startTime, endTime, serverTime}`. `RoomState` thêm `roomCode`, `participantCount` (số socket đang kết nối) và `monitor?: StudentUpdate[]` chỉ dành cho Teacher/Admin. `AttemptState = {attemptId, examId, status, submittedAt, answers: [{questionId, optionIds}], clock}`. Không có đáp án đúng trong các payload này. `StudentUpdate = {examId, attemptId, userId, online, lastHeartbeat, answeredCount, violationCount, lastViolation, status}`. `Submitted = {examId, attemptId, userId, status, submittedAt}`.
 

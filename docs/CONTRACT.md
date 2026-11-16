@@ -44,7 +44,7 @@ CODEOWNERS hiện là mẫu: thay handle thật và bật branch protection trê
 
 - TV1: Auth/session Redis, single-session và CSRF/rate limit theo `auth-contract.md`; tiếp tục HTTPS staging và tích hợp quản trị tài khoản.
 - TV2: hoàn thiện OpenAPI cho endpoint PDF, Prisma baseline từ SQL hiện có, seed và API nghiệp vụ. Chưa chạy Prisma migration lên DB có sẵn.
-- TV3: tích hợp handler realtime vào namespace `/exam` và session Auth hiện có theo `auth-contract.md`; duy trì mock và logic realtime. Bootstrap hiện mới gắn xác thực Socket.IO, chưa mount các handler realtime.
+- TV3: duy trì handler realtime trên namespace `/exam`, dùng session Auth hiện có theo `auth-contract.md`; tiếp tục mock và kiểm thử nghiệp vụ.
 - TV4/TV5: UI, mock API, route và E2E nghiệp vụ; không tạo type/event trùng shared.
 
 Definition of Done: lint/type-check/test/build thành công, chạy được bằng Compose, đúng contract, cập nhật tài liệu và có review.
