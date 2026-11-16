@@ -1,10 +1,10 @@
 # Backend Realtime
 
-`src/index.ts` tạo một HTTP server và một Socket.IO server. Auth xác thực cookie/session trên namespace `/exam`; module realtime gắn handler và worker vào namespace đó. PostgreSQL pool và Redis client được dùng chung trong bootstrap.
+`src/index.ts` tạo một HTTP server và một Socket.IO server. Auth xác thực cookie/session trên namespace `/exam`; module realtime gắn handler và worker vào namespace đó. Auth và realtime dùng chung `PrismaClient` và Redis client trong bootstrap.
 
 - `handlers/gateway.ts`: ACK, room và phát sự kiện Socket.IO; Auth quản lý handshake và thu hồi session.
 - `jobs/worker.ts`: đồng bộ timer, quét offline và chốt bài hết giờ.
-- `services/`: nghiệp vụ Realtime, truy cập PostgreSQL và Redis.
+- `services/`: nghiệp vụ Realtime, truy cập PostgreSQL qua Prisma và Redis.
 - `errors.ts`, `index.ts`: lỗi dùng chung và điểm gắn module vào server.
 
 ```ts
@@ -14,7 +14,7 @@ import { mountRealtime } from './modules/realtime/index.js';
 const realtime = await mountRealtime({
   namespace: io.of(WS_NAMESPACE),
   sessions,
-  pool,
+  prisma,
   redis,
   environment: 'dev',
 });
@@ -27,7 +27,7 @@ await realtime.gateway.emitStudentUpdate(attemptId);
 realtime.close();
 ```
 
-Session lưu `userId` và `role` ở cấp cao nhất. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Realtime dùng cùng Redis client của Auth. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
+Session lưu `userId` và `role` ở cấp cao nhất. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Realtime dùng cùng Prisma và Redis client của Auth. Repository thao tác dữ liệu bằng Prisma; tiện ích đồng hồ tại `src/core/db/clock.ts` đọc `now()` qua Prisma để giữ thời gian PostgreSQL cho deadline và thời điểm nộp bài. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
 
 Lệnh ở workspace root: `pnpm install`, `pnpm check`, `pnpm test`, `pnpm build`. Chi tiết event và ACK ở [WebSocket contract](../../docs/ws-events.md).
 Backend Express + Socket.IO. Module Realtime tuân thủ `docs/ws-events.md`; không tạo Socket.IO server độc lập ngoài gateway chung.
