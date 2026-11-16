@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
 import type { NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
 import { z } from 'zod';
@@ -60,7 +59,6 @@ const redis = createClient({
 });
 redis.on('error', () => console.error('Redis connection unavailable'));
 let io: Server | undefined;
-let pool: Pool | undefined;
 let realtime: Awaited<ReturnType<typeof mountRealtime>> | undefined;
 let shuttingDown = false;
 async function shutdown() {
@@ -68,7 +66,6 @@ async function shutdown() {
   shuttingDown = true;
   realtime?.close();
   if (io) await new Promise<void>((resolve) => io!.close(() => resolve()));
-  if (pool) await pool.end();
   await prisma.$disconnect();
   if (redis.isOpen) await redis.quit();
 }
@@ -112,15 +109,10 @@ try {
       );
     },
   );
-  pool = new Pool({
-    connectionString: settings.DATABASE_URL,
-    connectionTimeoutMillis: 5000,
-  });
-  pool.on('error', () => console.error('PostgreSQL pool unavailable'));
   realtime = await mountRealtime({
     namespace: io.of(WS_NAMESPACE),
     sessions,
-    pool,
+    prisma,
     redis,
     environment: settings.APP_ENV,
   });

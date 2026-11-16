@@ -1,6 +1,11 @@
-/* TẦNG TRUY CẬP POSTGRESQL (NGUỒN DỮ LIỆU CHÍNH THỨC) */
+/* PostgreSQL remains authoritative; Prisma owns all realtime data operations. */
 
-import type { Pool, PoolClient } from 'pg';
+import {
+  Prisma,
+  type Attempt as PrismaAttempt,
+  type Exam as PrismaExam,
+  type PrismaClient,
+} from '@prisma/client';
 import type {
   AttemptState,
   AttemptStatus,
@@ -11,6 +16,7 @@ import type {
   Submitted,
   ViolationType,
 } from '../../../shared/realtime.js';
+import { databaseNow } from '../../../core/db/clock.js';
 import { RealtimeError } from '../errors.js';
 
 export type Principal = { userId: string; role: Role; sid: string };
@@ -31,8 +37,29 @@ type Attempt = {
   submitted_at: Date | null;
 };
 
-// Chuyển một row Exam thành ExamClock mà client có thể nhận
-function clock(exam: Exam): ExamClock {
+function toExam(row: PrismaExam): Exam {
+  return {
+    id: row.id,
+    owner_id: row.ownerId,
+    room_code: row.roomCode,
+    status: row.status as ExamStatus,
+    start_time: row.startTime,
+    end_time: row.endTime,
+    duration_sec: row.durationSec,
+  };
+}
+
+function toAttempt(row: PrismaAttempt): Attempt {
+  return {
+    id: row.id,
+    exam_id: row.examId,
+    user_id: row.userId,
+    status: row.status as AttemptStatus,
+    submitted_at: row.submittedAt,
+  };
+}
+
+export function clock(exam: Exam): ExamClock {
   return {
     examId: exam.id,
     status: exam.status,
@@ -42,31 +69,52 @@ function clock(exam: Exam): ExamClock {
   };
 }
 
-// Lớp đóng gói truy vấn SQL
+function isWriteConflict(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'P2034'
+  );
+}
+
 export class RealtimeRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly prisma: PrismaClient) {}
 
-  // Tìm kỳ thi theo UUID
+  // Retry serialization conflicts so concurrent requests retain the old
+  // row-lock behavior: one transition wins and the other observes its result.
+  private async serializable<T>(
+    work: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.prisma.$transaction(work, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 30_000,
+          timeout: 120_000,
+        });
+      } catch (error) {
+        if (!isWriteConflict(error) || attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+      }
+    }
+    throw new Error('Unreachable transaction state');
+  }
+
   async exam(examId: string): Promise<Exam> {
-    const result = await this.pool.query<Exam>(
-      'SELECT id, owner_id, room_code, status, start_time, end_time, duration_sec FROM exams WHERE id=$1',
-      [examId],
-    ); // $1 chống SQL injection
-    if (!result.rows[0]) throw new RealtimeError('NOT_FOUND', 'Exam not found');
-    return result.rows[0];
+    const row = await this.prisma.exam.findUnique({ where: { id: examId } });
+    if (!row) throw new RealtimeError('NOT_FOUND', 'Exam not found');
+    return toExam(row);
   }
 
-  // Tra kỳ thi bằng mã phòng 6 ký tự
   async examByCode(code: string): Promise<Exam> {
-    const result = await this.pool.query<Exam>(
-      'SELECT id, owner_id, room_code, status, start_time, end_time, duration_sec FROM exams WHERE room_code=$1',
-      [code],
-    );
-    if (!result.rows[0]) throw new RealtimeError('NOT_FOUND', 'Exam not found');
-    return result.rows[0];
+    const row = await this.prisma.exam.findUnique({
+      where: { roomCode: code },
+    });
+    if (!row) throw new RealtimeError('NOT_FOUND', 'Exam not found');
+    return toExam(row);
   }
 
-  // Phân quyền vào phòng: ADMIN, chủ kỳ thi TEACHER, hoặc STUDENT có mã phòng/attempt tương ứng
   async canJoin(
     exam: Exam,
     principal: Principal,
@@ -80,12 +128,11 @@ export class RealtimeRepository {
     if (principal.role !== 'STUDENT')
       throw new RealtimeError('FORBIDDEN', 'Exam access denied');
     if (roomCode === exam.room_code) return;
-    const result = await this.pool.query(
-      'SELECT 1 FROM attempts WHERE exam_id=$1 AND user_id=$2 LIMIT 1',
-      [exam.id, principal.userId],
-    );
-    if (!result.rowCount)
-      throw new RealtimeError('FORBIDDEN', 'Exam access denied');
+    const attempt = await this.prisma.attempt.findFirst({
+      where: { examId: exam.id, userId: principal.userId },
+      select: { id: true },
+    });
+    if (!attempt) throw new RealtimeError('FORBIDDEN', 'Exam access denied');
   }
 
   assertTeacher(exam: Exam, principal: Principal): void {
@@ -93,82 +140,112 @@ export class RealtimeRepository {
       throw new RealtimeError('FORBIDDEN', 'Teacher does not own exam');
   }
 
-  // Bắt đầu thi bằng một UPDATE có điều kiện nguyên tử để tránh hai request cùng bắt đầu
   async start(examId: string, principal: Principal): Promise<Exam> {
-    const result = await this.pool.query<Exam>(
-      `UPDATE exams SET status='RUNNING', start_time=now(), end_time=now() + duration_sec * interval '1 second'
-       WHERE id=$1 AND owner_id=$2 AND status IN ('DRAFT','SCHEDULED')
-       AND EXISTS (SELECT 1 FROM exam_questions WHERE exam_id=$1)
-       RETURNING id, owner_id, room_code, status, start_time, end_time, duration_sec`,
-      [examId, principal.userId],
-    );
-    if (result.rows[0]) return result.rows[0];
-    this.assertTeacher(await this.exam(examId), principal);
-    throw new RealtimeError('INVALID_STATE', 'Exam cannot be started');
+    return this.serializable(async (tx) => {
+      const current = await tx.exam.findUnique({
+        where: { id: examId },
+        include: { _count: { select: { questions: true } } },
+      });
+      if (!current) throw new RealtimeError('NOT_FOUND', 'Exam not found');
+      this.assertTeacher(toExam(current), principal);
+      if (
+        !['DRAFT', 'SCHEDULED'].includes(current.status) ||
+        current._count.questions === 0
+      )
+        throw new RealtimeError('INVALID_STATE', 'Exam cannot be started');
+      const now = await databaseNow(tx);
+      const result = await tx.exam.updateMany({
+        where: {
+          id: examId,
+          ownerId: principal.userId,
+          status: { in: ['DRAFT', 'SCHEDULED'] },
+          durationSec: current.durationSec,
+          questions: { some: {} },
+        },
+        data: {
+          status: 'RUNNING',
+          startTime: now,
+          endTime: new Date(now.getTime() + current.durationSec * 1000),
+        },
+      });
+      if (!result.count)
+        throw new RealtimeError('INVALID_STATE', 'Exam cannot be started');
+      return toExam(await tx.exam.findUniqueOrThrow({ where: { id: examId } }));
+    });
   }
 
-  // Gia hạn thời lượng khi kỳ thi còn RUNNING và chưa hết hạn
   async extend(
     examId: string,
     seconds: number,
     principal: Principal,
   ): Promise<Exam> {
-    const result = await this.pool.query<Exam>(
-      `UPDATE exams SET end_time=end_time + $3 * interval '1 second'
-       WHERE id=$1 AND owner_id=$2 AND status='RUNNING' AND end_time > now()
-       RETURNING id, owner_id, room_code, status, start_time, end_time, duration_sec`,
-      [examId, principal.userId, seconds],
-    );
-    if (result.rows[0]) return result.rows[0];
-    this.assertTeacher(await this.exam(examId), principal);
-    throw new RealtimeError('INVALID_STATE', 'Exam can no longer be extended');
+    return this.serializable(async (tx) => {
+      const current = await tx.exam.findUnique({ where: { id: examId } });
+      if (!current) throw new RealtimeError('NOT_FOUND', 'Exam not found');
+      this.assertTeacher(toExam(current), principal);
+      const now = await databaseNow(tx);
+      if (
+        current.status !== 'RUNNING' ||
+        !current.endTime ||
+        current.endTime <= now
+      )
+        throw new RealtimeError(
+          'INVALID_STATE',
+          'Exam can no longer be extended',
+        );
+      const result = await tx.exam.updateMany({
+        where: {
+          id: examId,
+          ownerId: principal.userId,
+          status: 'RUNNING',
+          endTime: { gt: now },
+        },
+        data: { endTime: new Date(current.endTime.getTime() + seconds * 1000) },
+      });
+      if (!result.count)
+        throw new RealtimeError(
+          'INVALID_STATE',
+          'Exam can no longer be extended',
+        );
+      return toExam(await tx.exam.findUniqueOrThrow({ where: { id: examId } }));
+    });
   }
 
-  // Khôi phục bài làm chỉ cho STUDENT sở hữu attempt
   async attemptState(
     attemptId: string,
     principal: Principal,
   ): Promise<AttemptState> {
-    type StateRow = Omit<Exam, 'id'> & {
-      id: string;
-      exam_id: string;
-      user_id: string;
-      attempt_status: AttemptStatus;
-      submitted_at: Date | null;
-    };
-    const result = await this.pool.query<StateRow>(
-      `SELECT a.id, a.exam_id, a.user_id, a.status AS attempt_status, a.submitted_at,
-        e.id AS exam_id, e.owner_id, e.room_code, e.status, e.start_time, e.end_time, e.duration_sec
-       FROM attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=$1`,
-      [attemptId],
-    );
-    const row = result.rows[0];
+    const row = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        exam: true,
+        answers: {
+          orderBy: { questionId: 'asc' },
+          include: {
+            selections: {
+              orderBy: { optionId: 'asc' },
+              select: { optionId: true },
+            },
+          },
+        },
+      },
+    });
     if (!row) throw new RealtimeError('NOT_FOUND', 'Attempt not found');
-    if (principal.role !== 'STUDENT' || row.user_id !== principal.userId)
+    if (principal.role !== 'STUDENT' || row.userId !== principal.userId)
       throw new RealtimeError('FORBIDDEN', 'Attempt access denied');
-    const answers = await this.pool.query<{
-      question_id: string;
-      option_ids: string[];
-    }>(
-      `SELECT a.question_id, COALESCE(array_agg(s.option_id ORDER BY s.option_id) FILTER (WHERE s.option_id IS NOT NULL), '{}') AS option_ids
-       FROM answers a LEFT JOIN answer_selected_options s ON s.attempt_id=a.attempt_id AND s.question_id=a.question_id
-       WHERE a.attempt_id=$1 GROUP BY a.question_id ORDER BY a.question_id`,
-      [attemptId],
-    );
     return {
       attemptId,
-      examId: row.exam_id,
-      status: row.attempt_status,
-      submittedAt: row.submitted_at?.toISOString() ?? null,
-      answers: answers.rows.map((a) => ({
-        questionId: a.question_id,
-        optionIds: a.option_ids,
+      examId: row.examId,
+      status: row.status as AttemptStatus,
+      submittedAt: row.submittedAt?.toISOString() ?? null,
+      answers: row.answers.map((answer) => ({
+        questionId: answer.questionId,
+        optionIds: answer.selections.map((selection) => selection.optionId),
       })),
-      clock: clock({ ...row, id: row.exam_id }),
+      clock: clock(toExam(row.exam)),
     };
   }
 
-  // Ghi một vi phạm giám sát sau khi xác thực vai trò và trạng thái attempt
   async recordViolation(
     attemptId: string,
     principal: Principal,
@@ -177,134 +254,142 @@ export class RealtimeRepository {
   ): Promise<string> {
     if (principal.role !== 'STUDENT')
       throw new RealtimeError('FORBIDDEN', 'Student role required');
-    const result = await this.pool.query<{ at: Date }>(
-      `INSERT INTO proctor_logs(attempt_id,type,client_at)
-       SELECT a.id,$3,$4 FROM attempts a JOIN exams e ON e.id=a.exam_id
-       WHERE a.id=$1 AND a.user_id=$2 AND a.status='IN_PROGRESS' AND e.status='RUNNING' AND e.end_time>now()
-       RETURNING "at"`,
-      [attemptId, principal.userId, type, clientAt],
-    );
-    if (!result.rows[0])
-      throw new RealtimeError('INVALID_STATE', 'Attempt is not active');
-    return result.rows[0].at.toISOString();
+    return this.serializable(async (tx) => {
+      const row = await tx.attempt.findUnique({
+        where: { id: attemptId },
+        include: { exam: true },
+      });
+      const now = await databaseNow(tx);
+      if (
+        !row ||
+        row.userId !== principal.userId ||
+        row.status !== 'IN_PROGRESS' ||
+        row.exam.status !== 'RUNNING' ||
+        !row.exam.endTime ||
+        row.exam.endTime <= now
+      )
+        throw new RealtimeError('INVALID_STATE', 'Attempt is not active');
+      const log = await tx.proctorLog.create({
+        data: { attemptId, type, clientAt },
+      });
+      return log.at.toISOString();
+    });
   }
 
-  // Đảm bảo heartbeat/violation chỉ được thực hiện khi kỳ thi và attempt đang mở
   async activeAttempt(
     attemptId: string,
     principal: Principal,
   ): Promise<Attempt> {
-    const result = await this.pool.query<
-      Attempt & { exam_status: ExamStatus; before_deadline: boolean }
-    >(
-      `SELECT a.id,a.exam_id,a.user_id,a.status,a.submitted_at,e.status AS exam_status,e.end_time>now() AS before_deadline
-       FROM attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=$1`,
-      [attemptId],
-    );
-    const row = result.rows[0];
+    const row = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: { exam: true },
+    });
     if (!row) throw new RealtimeError('NOT_FOUND', 'Attempt not found');
-    if (principal.role !== 'STUDENT' || row.user_id !== principal.userId)
+    if (principal.role !== 'STUDENT' || row.userId !== principal.userId)
       throw new RealtimeError('FORBIDDEN', 'Attempt access denied');
+    const now = await databaseNow(this.prisma);
     if (
       row.status !== 'IN_PROGRESS' ||
-      row.exam_status !== 'RUNNING' ||
-      !row.before_deadline
-    ) {
+      row.exam.status !== 'RUNNING' ||
+      !row.exam.endTime ||
+      row.exam.endTime <= now
+    )
       throw new RealtimeError('INVALID_STATE', 'Attempt is not active');
-    }
-    return row;
+    return toAttempt(row);
   }
 
-  // Tạo dữ liệu dashboard giám sát từ số câu trả lời và log vi phạm thực tế
   async studentUpdate(
     attemptId: string,
   ): Promise<Omit<StudentUpdate, 'online' | 'lastHeartbeat'>> {
-    const result = await this.pool.query<{
-      exam_id: string;
-      user_id: string;
-      status: AttemptStatus;
-      answered_count: string;
-      violation_count: string;
-      last_type: ViolationType | null;
-      last_at: Date | null;
-    }>(
-      `SELECT a.exam_id,a.user_id,a.status,
-      (SELECT count(*) FROM answers an WHERE an.attempt_id=a.id)::text AS answered_count,
-      (SELECT count(*) FROM proctor_logs p WHERE p.attempt_id=a.id)::text AS violation_count,
-      (SELECT p.type FROM proctor_logs p WHERE p.attempt_id=a.id ORDER BY p."at" DESC LIMIT 1) AS last_type,
-      (SELECT p."at" FROM proctor_logs p WHERE p.attempt_id=a.id ORDER BY p."at" DESC LIMIT 1) AS last_at
-      FROM attempts a WHERE a.id=$1`,
-      [attemptId],
-    );
-    const row = result.rows[0];
+    const row = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      select: {
+        examId: true,
+        userId: true,
+        status: true,
+        _count: { select: { answers: true, proctorLogs: true } },
+        proctorLogs: {
+          orderBy: { at: 'desc' },
+          take: 1,
+          select: { type: true, at: true },
+        },
+      },
+    });
     if (!row) throw new RealtimeError('NOT_FOUND', 'Attempt not found');
+    const latest = row.proctorLogs[0];
     return {
-      examId: row.exam_id,
+      examId: row.examId,
       attemptId,
-      userId: row.user_id,
-      status: row.status,
-      answeredCount: Number(row.answered_count),
-      violationCount: Number(row.violation_count),
-      lastViolation:
-        row.last_type && row.last_at
-          ? { type: row.last_type, at: row.last_at.toISOString() }
-          : null,
+      userId: row.userId,
+      status: row.status as AttemptStatus,
+      answeredCount: row._count.answers,
+      violationCount: row._count.proctorLogs,
+      lastViolation: latest
+        ? { type: latest.type as ViolationType, at: latest.at.toISOString() }
+        : null,
     };
   }
 
-  // Lấy danh sách attempt của kỳ thi để gateway/service tổng hợp bảng giám sát
   async monitor(examId: string): Promise<string[]> {
-    const result = await this.pool.query<{ id: string }>(
-      'SELECT id FROM attempts WHERE exam_id=$1 ORDER BY started_at,id',
-      [examId],
-    );
-    return result.rows.map((row) => row.id);
+    const rows = await this.prisma.attempt.findMany({
+      where: { examId },
+      orderBy: [{ startedAt: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    return rows.map((row) => row.id);
   }
 
-  // Worker dùng khi khởi động/tick để phục hồi các lịch thi còn hoạt động
   async runningExams(): Promise<Exam[]> {
-    const result = await this.pool.query<Exam>(
-      `SELECT id,owner_id,room_code,status,start_time,end_time,duration_sec FROM exams WHERE status='RUNNING'`,
-    );
-    return result.rows;
+    const rows = await this.prisma.exam.findMany({
+      where: { status: 'RUNNING' },
+    });
+    return rows.map(toExam);
   }
 
-  // Tìm kỳ thi ENDED vẫn còn attempt IN_PROGRESS (hệ thống có thể bị gián đoạn)
   async unfinishedEndedExams(): Promise<Exam[]> {
-    const result = await this.pool
-      .query<Exam>(`SELECT e.id,e.owner_id,e.room_code,e.status,e.start_time,e.end_time,e.duration_sec
-      FROM exams e WHERE e.status='ENDED' AND EXISTS (SELECT 1 FROM attempts a WHERE a.exam_id=e.id AND a.status='IN_PROGRESS')`);
-    return result.rows;
+    const rows = await this.prisma.exam.findMany({
+      where: { status: 'ENDED', attempts: { some: { status: 'IN_PROGRESS' } } },
+    });
+    return rows.map(toExam);
   }
 
-  // Chấm điểm một attempt ngay trên client của transaction đang khóa dữ liệu
   private async grade(
-    client: PoolClient,
+    tx: Prisma.TransactionClient,
     attemptId: string,
     examId: string,
   ): Promise<{ score: number; maxScore: number }> {
-    const result = await client.query<{
-      points: string;
-      correct: string[];
-      selected: string[];
-    }>(
-      `SELECT eq.points::text,
-        COALESCE(array_agg(DISTINCT o.id::text) FILTER (WHERE o.is_correct), '{}') AS correct,
-        COALESCE(array_agg(DISTINCT s.option_id::text) FILTER (WHERE s.option_id IS NOT NULL), '{}') AS selected
-       FROM exam_questions eq LEFT JOIN options o ON o.question_id=eq.question_id
-       LEFT JOIN answer_selected_options s ON s.question_id=eq.question_id AND s.attempt_id=$1
-       WHERE eq.exam_id=$2 GROUP BY eq.question_id,eq.points`,
-      [attemptId, examId],
-    );
+    const questions = await tx.examQuestion.findMany({
+      where: { examId },
+      select: {
+        points: true,
+        question: {
+          select: {
+            options: { where: { isCorrect: true }, select: { id: true } },
+          },
+        },
+        answers: {
+          where: { attemptId },
+          select: { selections: { select: { optionId: true } } },
+        },
+      },
+    });
     let score = 0;
     let maxScore = 0;
-    for (const row of result.rows) {
-      const points = Number(row.points);
+    for (const question of questions) {
+      const points = Number(question.points);
       maxScore += points;
+      const correct = new Set(
+        question.question.options.map((option) => option.id),
+      );
+      const selected = new Set(
+        question.answers.flatMap((answer) =>
+          answer.selections.map((selection) => selection.optionId),
+        ),
+      );
       if (
-        row.correct.length > 0 &&
-        row.correct.length === row.selected.length &&
-        row.correct.every((id) => row.selected.includes(id))
+        correct.size > 0 &&
+        correct.size === selected.size &&
+        [...correct].every((id) => selected.has(id))
       )
         score += points;
     }
@@ -314,110 +399,83 @@ export class RealtimeRepository {
     };
   }
 
-  // Chốt bài trong transaction; caller phải khóa row attempt trước khi gọi
   private async submitLocked(
-    client: PoolClient,
+    tx: Prisma.TransactionClient,
     attempt: Attempt,
     status: Exclude<AttemptStatus, 'IN_PROGRESS'>,
   ): Promise<Submitted | null> {
     if (attempt.status !== 'IN_PROGRESS') return null;
     const { score, maxScore } = await this.grade(
-      client,
+      tx,
       attempt.id,
       attempt.exam_id,
     );
-    const result = await client.query<{ submitted_at: Date }>(
-      `UPDATE attempts SET status=$2,submitted_at=now(),score=$3,max_score=$4 WHERE id=$1 AND status='IN_PROGRESS' RETURNING submitted_at`,
-      [attempt.id, status, score, maxScore],
-    );
-    if (!result.rows[0]) return null;
+    const submittedAt = await databaseNow(tx);
+    const result = await tx.attempt.updateMany({
+      where: { id: attempt.id, status: 'IN_PROGRESS' },
+      data: { status, submittedAt, score, maxScore },
+    });
+    if (!result.count) return null;
     return {
       attemptId: attempt.id,
       examId: attempt.exam_id,
       userId: attempt.user_id,
       status,
-      submittedAt: result.rows[0].submitted_at.toISOString(),
+      submittedAt: submittedAt.toISOString(),
     };
   }
 
-  // Giáo viên buộc nộp bài qua transaction và khóa attempt
   async forceSubmit(
     attemptId: string,
     principal: Principal,
   ): Promise<Submitted | null> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await client.query<
-        Attempt & { owner_id: string; exam_status: ExamStatus }
-      >(
-        `SELECT a.id,a.exam_id,a.user_id,a.status,a.submitted_at,e.owner_id,e.status AS exam_status
-         FROM attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=$1 FOR UPDATE OF a`,
-        [attemptId],
-      );
-      const row = result.rows[0];
+    return this.serializable(async (tx) => {
+      const row = await tx.attempt.findUnique({
+        where: { id: attemptId },
+        include: { exam: true },
+      });
       if (!row) throw new RealtimeError('NOT_FOUND', 'Attempt not found');
-      if (principal.role !== 'TEACHER' || row.owner_id !== principal.userId)
+      if (principal.role !== 'TEACHER' || row.exam.ownerId !== principal.userId)
         throw new RealtimeError('FORBIDDEN', 'Teacher does not own exam');
-      if (row.status === 'IN_PROGRESS' && row.exam_status !== 'RUNNING')
+      if (row.status === 'IN_PROGRESS' && row.exam.status !== 'RUNNING')
         throw new RealtimeError('INVALID_STATE', 'Exam is not running');
-      const submitted = await this.submitLocked(client, row, 'FORCE_SUBMITTED');
-      await client.query('COMMIT');
-      return submitted;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+      return this.submitLocked(tx, toAttempt(row), 'FORCE_SUBMITTED');
+    });
   }
 
-  // Worker dùng để chốt tất cả bài quá hạn và chuyển kỳ thi thành ENDED
   async finishExpired(
     examId: string,
   ): Promise<{ exam: Exam; submissions: Submitted[]; ended: boolean } | null> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const examResult = await client.query<Exam>(
-        `SELECT id,owner_id,room_code,status,start_time,end_time,duration_sec FROM exams
-         WHERE id=$1 AND end_time + interval '5 seconds' < now() FOR UPDATE`,
-        [examId],
-      );
-      const exam = examResult.rows[0];
-      if (!exam || !['RUNNING', 'ENDED'].includes(exam.status)) {
-        await client.query('COMMIT');
+    return this.serializable(async (tx) => {
+      const row = await tx.exam.findUnique({ where: { id: examId } });
+      const now = await databaseNow(tx);
+      if (
+        !row ||
+        !row.endTime ||
+        row.endTime.getTime() + 5000 >= now.getTime() ||
+        !['RUNNING', 'ENDED'].includes(row.status)
+      )
         return null;
-      }
-      const attempts = await client.query<Attempt>(
-        `SELECT id,exam_id,user_id,status,submitted_at FROM attempts WHERE exam_id=$1 AND status='IN_PROGRESS' FOR UPDATE`,
-        [examId],
-      );
+      const attempts = await tx.attempt.findMany({
+        where: { examId, status: 'IN_PROGRESS' },
+      });
       const submissions: Submitted[] = [];
-      for (const attempt of attempts.rows) {
+      for (const attempt of attempts) {
         const submitted = await this.submitLocked(
-          client,
-          attempt,
+          tx,
+          toAttempt(attempt),
           'AUTO_SUBMITTED',
         );
         if (submitted) submissions.push(submitted);
       }
-      const ended = exam.status === 'RUNNING';
-      if (ended) {
-        await client.query(`UPDATE exams SET status='ENDED' WHERE id=$1`, [
-          examId,
-        ]);
-        exam.status = 'ENDED';
-      }
-      await client.query('COMMIT');
-      return { exam, submissions, ended };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+      const ended = row.status === 'RUNNING';
+      const exam = ended
+        ? await tx.exam.update({
+            where: { id: examId },
+            data: { status: 'ENDED' },
+          })
+        : row;
+      return { exam: toExam(exam), submissions, ended };
+    });
   }
 }
-
-export { clock };

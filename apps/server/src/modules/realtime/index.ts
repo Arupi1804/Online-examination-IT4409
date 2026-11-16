@@ -6,7 +6,7 @@ export { RealtimeRedis } from './services/redis.js';
 export { RealtimeService } from './services/service.js';
 export { RealtimeWorker } from './jobs/worker.js';
 
-import type { Pool } from 'pg';
+import type { PrismaClient } from '@prisma/client';
 import type { Namespace } from 'socket.io';
 import type { AuthSessions } from '../auth/session.js';
 import type { AuthRedis } from '../auth/services/session-store.js';
@@ -20,7 +20,7 @@ import { RealtimeWorker } from './jobs/worker.js';
 export async function mountRealtime(options: {
   namespace: Namespace;
   sessions: AuthSessions;
-  pool: Pool;
+  prisma: PrismaClient;
   redis: AuthRedis;
   environment: 'dev' | 'staging' | 'prod';
   logger?: Pick<Console, 'error'>;
@@ -30,7 +30,7 @@ export async function mountRealtime(options: {
     `oe:${options.environment}:v1`,
   );
   const service = new RealtimeService(
-    new RealtimeRepository(options.pool),
+    new RealtimeRepository(options.prisma),
     cache,
     options.logger,
   );
