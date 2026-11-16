@@ -17,6 +17,7 @@ import type {
   ViolationType,
 } from '../../../shared/realtime.js';
 import { databaseNow } from '../../../core/db/clock.js';
+import { isRetryableTransactionError } from '../../../core/db/transaction-error.js';
 import {
   lockAttempt,
   lockExpiredExam,
@@ -74,15 +75,6 @@ export function clock(exam: Exam): ExamClock {
   };
 }
 
-function isWriteConflict(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'P2034'
-  );
-}
-
 export class RealtimeRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -99,7 +91,7 @@ export class RealtimeRepository {
           timeout: 120_000,
         });
       } catch (error) {
-        if (!isWriteConflict(error) || attempt === 2) throw error;
+        if (!isRetryableTransactionError(error) || attempt === 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
       }
     }
