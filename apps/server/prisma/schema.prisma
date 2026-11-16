@@ -1,0 +1,146 @@
+// Maps the existing database/init/001_schema.sql. Generate only; TV2 owns baselining/migrations.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  name         String
+  role         String
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  questions    Question[]
+  exams        Exam[]
+  attempts     Attempt[]
+
+  @@map("users")
+}
+
+model Question {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId     String         @map("owner_id") @db.Uuid
+  type        String
+  content     String
+  explanation String?
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  owner       User           @relation(fields: [ownerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  options     Option[]
+  exams       ExamQuestion[]
+
+  @@index([ownerId], map: "questions_owner_id_idx")
+  @@map("questions")
+}
+
+model Option {
+  id         String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionId String                 @map("question_id") @db.Uuid
+  content    String
+  isCorrect  Boolean                @default(false) @map("is_correct")
+  question   Question               @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  selections AnswerSelectedOption[]
+
+  @@unique([questionId, id])
+  @@index([questionId], map: "options_question_id_idx")
+  @@map("options")
+}
+
+model Exam {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId          String         @map("owner_id") @db.Uuid
+  title            String
+  roomCode         String         @unique @map("room_code")
+  durationSec      Int            @map("duration_sec")
+  status           String         @default("DRAFT")
+  startTime        DateTime?      @map("start_time") @db.Timestamptz
+  endTime          DateTime?      @map("end_time") @db.Timestamptz
+  shuffleQuestions Boolean        @default(false) @map("shuffle_questions")
+  shuffleOptions   Boolean        @default(false) @map("shuffle_options")
+  maxAttempts      Int            @default(1) @map("max_attempts")
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  owner            User           @relation(fields: [ownerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  questions        ExamQuestion[]
+  attempts         Attempt[]
+
+  @@index([ownerId], map: "exams_owner_id_idx")
+  @@map("exams")
+}
+
+model ExamQuestion {
+  examId     String   @map("exam_id") @db.Uuid
+  questionId String   @map("question_id") @db.Uuid
+  orderIndex Int      @map("order_index")
+  points     Decimal  @db.Decimal(10, 2)
+  exam       Exam     @relation(fields: [examId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  answers    Answer[]
+
+  @@id([examId, questionId])
+  @@unique([examId, orderIndex])
+  @@index([questionId], map: "exam_questions_question_id_idx")
+  @@map("exam_questions")
+}
+
+model Attempt {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  examId      String       @map("exam_id") @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+  status      String       @default("IN_PROGRESS")
+  shuffleSeed String?      @map("shuffle_seed")
+  startedAt   DateTime     @default(now()) @map("started_at") @db.Timestamptz
+  submittedAt DateTime?    @map("submitted_at") @db.Timestamptz
+  score       Decimal?     @db.Decimal(10, 2)
+  maxScore    Decimal?     @map("max_score") @db.Decimal(10, 2)
+  exam        Exam         @relation(fields: [examId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  answers     Answer[]
+  proctorLogs ProctorLog[]
+
+  @@unique([id, examId])
+  @@index([examId, userId], map: "attempts_exam_user_idx")
+  @@index([examId, status], map: "attempts_exam_status_idx")
+  @@map("attempts")
+}
+
+model Answer {
+  attemptId  String                 @map("attempt_id") @db.Uuid
+  examId     String                 @map("exam_id") @db.Uuid
+  questionId String                 @map("question_id") @db.Uuid
+  updatedAt  DateTime               @default(now()) @map("updated_at") @db.Timestamptz
+  attempt    Attempt                @relation(fields: [attemptId, examId], references: [id, examId], onDelete: NoAction, onUpdate: NoAction)
+  question   ExamQuestion           @relation(fields: [examId, questionId], references: [examId, questionId], onDelete: NoAction, onUpdate: NoAction)
+  selections AnswerSelectedOption[]
+
+  @@id([attemptId, questionId])
+  @@index([examId, questionId], map: "answers_exam_question_idx")
+  @@map("answers")
+}
+
+model AnswerSelectedOption {
+  attemptId  String @map("attempt_id") @db.Uuid
+  questionId String @map("question_id") @db.Uuid
+  optionId   String @map("option_id") @db.Uuid
+  answer     Answer @relation(fields: [attemptId, questionId], references: [attemptId, questionId], onDelete: Cascade, onUpdate: NoAction)
+  option     Option @relation(fields: [questionId, optionId], references: [questionId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([attemptId, questionId, optionId])
+  @@index([questionId, optionId], map: "answer_selected_options_option_idx")
+  @@map("answer_selected_options")
+}
+
+model ProctorLog {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attemptId String    @map("attempt_id") @db.Uuid
+  type      String
+  at        DateTime  @default(now()) @db.Timestamptz
+  clientAt  DateTime? @map("client_at") @db.Timestamptz
+  attempt   Attempt   @relation(fields: [attemptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([attemptId, at(sort: Desc)], map: "proctor_logs_attempt_at_idx")
+  @@map("proctor_logs")
+}
