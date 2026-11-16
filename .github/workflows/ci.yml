@@ -7,7 +7,32 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      DATABASE_URL: postgresql://online_exam:ci-only-password@localhost:5432/online_exam?schema=public
+      AUTH_DATABASE_URL: postgresql://online_exam:ci-only-password@localhost:5432/online_exam?schema=public
+      REDIS_URL: redis://localhost:6379/0
+      AUTH_REDIS_URL: redis://localhost:6379/0
+      SESSION_SECRET: ci-only-session-secret-at-least-32-characters
+      APP_ENV: dev
+      COOKIE_SECURE: 'false'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: online_exam
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: online_exam
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U online_exam -d online_exam"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -16,6 +41,8 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Initialize isolated CI database from SQL
+        run: pnpm --filter @online-exam/server exec prisma db execute --file ../../database/init/001_schema.sql --schema prisma/schema.prisma
       - run: pnpm check
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e --project=chromium
