@@ -2,10 +2,12 @@
 
 Các file `init/NNN_*.sql` là nguồn chính của schema PostgreSQL 16. Docker Compose chạy chúng theo thứ tự tên khi tạo **volume PostgreSQL mới** (`docker compose up -d postgres`). Mỗi file chỉ chạy được một lần; không sửa file đã merge, thay đổi tiếp theo thêm file số mới.
 
-| File                | Nội dung                                                                                                                                             |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `001_schema.sql`    | Schema ban đầu                                                                                                                                       |
-| `002_exam_core.sql` | `options.order_index`, `updated_at` cho `questions`/`exams`, xóa dây chuyền `options` và `exam_questions`, email duy nhất không phân biệt hoa thường |
+| File                | Nội dung                                                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `001_schema.sql`    | Schema ban đầu                                                                                                                                                   |
+| `002_exam_core.sql` | `options.order_index` (đánh số lại đáp án có sẵn, không có giá trị mặc định), `updated_at` cho `questions`/`exams`, xóa dây chuyền `options` và `exam_questions` |
+
+CI chạy lần lượt mọi file trong `init/` trước `pnpm check`. Email được lưu lowercase ở tầng API (`packages/shared/src/auth.ts`), nên database không cần index `lower(email)`.
 
 Volume đã có từ trước chỉ cần chạy các file mới bằng tay (thay `002_exam_core.sql` bằng file cần chạy; đổi user/database nếu `.env` khác), hoặc xóa volume bằng `docker compose down -v` nếu không cần giữ dữ liệu:
 

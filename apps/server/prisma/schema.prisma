@@ -3,9 +3,10 @@
 // update this file and check with `pnpm --filter @online-exam/server db:diff`
 // (must print an empty migration).
 // Not expressible here and enforced only by SQL: CHECK constraints (status,
-// type, role, room code…), the partial unique index allowing one IN_PROGRESS
-// attempt per student, and the lower(email) unique index.
+// type, role, room code…) and the partial unique index allowing one
+// IN_PROGRESS attempt per student.
 // Status/type/role columns are plain strings; validate with packages/shared.
+// Emails are stored lowercase by the Auth schemas (packages/shared/src/auth.ts).
 
 generator client {
   provider = "prisma-client-js"
@@ -51,7 +52,7 @@ model Option {
   questionId      String                 @map("question_id") @db.Uuid
   content         String
   isCorrect       Boolean                @default(false) @map("is_correct")
-  orderIndex      Int                    @default(0) @map("order_index")
+  orderIndex      Int                    @map("order_index")
   question        Question               @relation(fields: [questionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   selectedAnswers AnswerSelectedOption[]
 

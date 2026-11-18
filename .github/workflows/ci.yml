@@ -42,7 +42,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Initialize isolated CI database from SQL
-        run: pnpm --filter @online-exam/server exec prisma db execute --file ../../database/init/001_schema.sql --schema prisma/schema.prisma
+        run: |
+          for file in database/init/*.sql; do
+            pnpm --filter @online-exam/server exec prisma db execute --file "../../$file" --schema prisma/schema.prisma
+          done
       - run: pnpm check
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e --project=chromium

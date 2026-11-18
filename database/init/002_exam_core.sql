@@ -4,9 +4,20 @@
 
 BEGIN;
 
--- Display order of options when an exam does not shuffle them.
+-- Display order of options when an exam does not shuffle them. Existing
+-- options are numbered 0..n-1 per question before the unique constraint;
+-- there is no default, so every insert must state its position.
+ALTER TABLE options ADD COLUMN order_index INTEGER;
+UPDATE options o
+SET order_index = n.position
+FROM (
+  SELECT id, row_number() OVER (PARTITION BY question_id ORDER BY id) - 1 AS position
+  FROM options
+) n
+WHERE o.id = n.id;
 ALTER TABLE options
-  ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0 CHECK (order_index >= 0),
+  ALTER COLUMN order_index SET NOT NULL,
+  ADD CONSTRAINT options_order_index_check CHECK (order_index >= 0),
   ADD CONSTRAINT options_question_order_key UNIQUE (question_id, order_index);
 
 -- Editing a question replaces its options; deleting a draft exam removes its
@@ -24,8 +35,5 @@ ALTER TABLE questions
   ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE exams
   ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
-
--- The API stores emails trimmed and lowercased; this backs it up.
-CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
 
 COMMIT;
