@@ -6,7 +6,7 @@ import {
 } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
-import type { NextFunction } from 'express';
+import { Router, type NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
@@ -19,6 +19,7 @@ import {
   createAuthRouter,
   PrismaAuthRepository,
 } from './modules/auth/index.js';
+import { createQuestionsRouter } from './modules/questions/controllers/questions.controller.js';
 
 config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
 const env = z
@@ -81,9 +82,15 @@ try {
       .update('oe-auth-rate-limit-v1')
       .digest('hex'),
   });
+  const apiRouter = Router();
+  apiRouter.use(
+    '/questions',
+    createQuestionsRouter(prisma, sessions.requireRoles('TEACHER')),
+  );
   const server = createServer(
     createApp(settings.CLIENT_ORIGIN, {
       authRouter,
+      apiRouter,
       sessionMiddleware: sessions.sessionMiddleware,
       trustProxyHops: settings.TRUST_PROXY_HOPS,
     }),

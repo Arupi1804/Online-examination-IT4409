@@ -1,6 +1,5 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { ERROR_CODES, type QuestionInput } from '@online-exam/shared';
-import { prisma } from '../../../core/prisma.js';
 import { HttpError } from '../../../core/errors/http-error.js';
 import type { ListQuestionsQuery } from '../dto/question.dto.js';
 
@@ -50,6 +49,7 @@ const optionRows = (input: QuestionInput) =>
   input.options.map((o, orderIndex) => ({ ...o, orderIndex }));
 
 export async function listQuestions(
+  prisma: PrismaClient,
   ownerId: string,
   { page, pageSize, sort, type, q }: ListQuestionsQuery,
 ) {
@@ -75,7 +75,11 @@ export async function listQuestions(
   return { data: rows.map(toDto), meta: { page, pageSize, total } };
 }
 
-export async function getQuestion(ownerId: string, id: string) {
+export async function getQuestion(
+  prisma: PrismaClient,
+  ownerId: string,
+  id: string,
+) {
   const row = await prisma.question.findFirst({
     where: { id, ownerId },
     include,
@@ -84,7 +88,11 @@ export async function getQuestion(ownerId: string, id: string) {
   return toDto(row);
 }
 
-export async function createQuestion(ownerId: string, input: QuestionInput) {
+export async function createQuestion(
+  prisma: PrismaClient,
+  ownerId: string,
+  input: QuestionInput,
+) {
   const row = await prisma.question.create({
     data: { ownerId, ...fields(input), options: { create: optionRows(input) } },
     include,
@@ -93,6 +101,7 @@ export async function createQuestion(ownerId: string, input: QuestionInput) {
 }
 
 export async function updateQuestion(
+  prisma: PrismaClient,
   ownerId: string,
   id: string,
   input: QuestionInput,
@@ -117,7 +126,11 @@ export async function updateQuestion(
   });
 }
 
-export async function deleteQuestion(ownerId: string, id: string) {
+export async function deleteQuestion(
+  prisma: PrismaClient,
+  ownerId: string,
+  id: string,
+) {
   const current = await prisma.question.findFirst({
     where: { id, ownerId },
     select: { _count: { select: { examQuestions: true } } },

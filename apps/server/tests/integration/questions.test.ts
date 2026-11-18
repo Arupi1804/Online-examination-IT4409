@@ -1,25 +1,47 @@
 import { randomUUID } from 'node:crypto';
-import express from 'express';
+import { fileURLToPath } from 'node:url';
+import { config } from 'dotenv';
+import { Router } from 'express';
+import { PrismaClient } from '@prisma/client';
+import { createClient } from 'redis';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Role } from '@online-exam/shared';
-import { prisma } from '../../src/core/prisma.js';
-import { handleError } from '../../src/core/http/error-handler.js';
-import { questionsRouter } from '../../src/modules/questions/controllers/questions.controller.js';
+import { createApp } from '../../src/app.js';
+import {
+  AuthSessions,
+  AuthSessionStore,
+} from '../../src/modules/auth/index.js';
+import { createQuestionsRouter } from '../../src/modules/questions/controllers/questions.controller.js';
 
-// Needs the local PostgreSQL from `pnpm infra:up` (core/prisma loads the root
-// .env); skipped where DATABASE_URL is unset, e.g. CI without a database.
+// Uses PostgreSQL with database/init/*.sql applied: CI's service, or locally
+// `pnpm infra:up` with the root .env. Skipped when DATABASE_URL is unset.
+config({ path: fileURLToPath(new URL('../../../../.env', import.meta.url)) });
 
+const origin = 'http://localhost:5173';
+// requireRoles only reads req.principal, so this store never touches Redis.
+const sessions = new AuthSessions({
+  store: new AuthSessionStore(createClient(), 'oe:test:v1'),
+  secret: 'questions-test-secret-at-least-32-chars',
+  clientOrigin: origin,
+  secureCookie: false,
+});
+let prisma: PrismaClient;
+
+// Stands in for the session middleware: signs the request in as `user`.
 function appAs(user?: { id: string; role: Role }) {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    Object.assign(req, { session: user && { user } });
-    next();
+  const apiRouter = Router();
+  apiRouter.use(
+    '/questions',
+    createQuestionsRouter(prisma, sessions.requireRoles('TEACHER')),
+  );
+  return createApp(origin, {
+    apiRouter,
+    sessionMiddleware: (req, _res, next) => {
+      if (user) req.principal = { ...user, userId: user.id, sid: 'test' };
+      next();
+    },
   });
-  app.use('/questions', questionsRouter);
-  app.use(handleError);
-  return app;
 }
 
 const single = (content = 'Thủ đô Việt Nam?') => ({
@@ -48,6 +70,9 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
   let other: ReturnType<typeof appAs>;
 
   beforeAll(async () => {
+    prisma = new PrismaClient({
+      datasources: { db: { url: process.env.DATABASE_URL } },
+    });
     for (const [key, role] of [
       ['teacher', 'TEACHER'],
       ['other', 'TEACHER'],
@@ -76,15 +101,15 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
   });
 
   it('requires a teacher session', async () => {
-    expect((await request(appAs()).get('/questions')).status).toBe(401);
+    expect((await request(appAs()).get('/api/v1/questions')).status).toBe(401);
     const student = appAs({ id: ids.student, role: 'STUDENT' });
-    const res = await request(student).get('/questions');
+    const res = await request(student).get('/api/v1/questions');
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
 
   it('creates a question keeping option order and hiding the owner', async () => {
-    const res = await request(teacher).post('/questions').send(single());
+    const res = await request(teacher).post('/api/v1/questions').send(single());
     expect(res.status).toBe(201);
     expect(res.body.data).toMatchObject({
       type: 'SINGLE',
@@ -102,47 +127,68 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
       ...single(),
       options: single().options.map((o) => ({ ...o, isCorrect: true })),
     };
-    const res = await request(teacher).post('/questions').send(twoCorrect);
+    const res = await request(teacher)
+      .post('/api/v1/questions')
+      .send(twoCorrect);
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_FAILED');
     expect(res.body.error.details[0].field).toBe('options');
   });
 
+  it('rejects a page number too large for the database offset', async () => {
+    const res = await request(teacher).get(
+      '/api/v1/questions?page=1000000000000000000000000',
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error.details[0].field).toBe('page');
+  });
+
   it('lists only own questions with paging, type filter and search', async () => {
     await request(teacher)
-      .post('/questions')
+      .post('/api/v1/questions')
       .send(single(`Tìm kiếm ${run}`));
-    await request(other).post('/questions').send(single());
+    await request(other).post('/api/v1/questions').send(single());
 
-    const all = await request(teacher).get('/questions?pageSize=1');
+    const all = await request(teacher).get('/api/v1/questions?pageSize=1');
     expect(all.status).toBe(200);
     expect(all.body.meta).toEqual({ page: 1, pageSize: 1, total: 2 });
     expect(all.body.data).toHaveLength(1);
 
-    const found = await request(teacher).get(`/questions?q=TÌM KIẾM ${run}`);
+    const found = await request(teacher).get(
+      `/api/v1/questions?q=TÌM KIẾM ${run}`,
+    );
     expect(found.body.meta.total).toBe(1);
-    const none = await request(teacher).get('/questions?type=MULTIPLE');
+    const none = await request(teacher).get('/api/v1/questions?type=MULTIPLE');
     expect(none.body.meta.total).toBe(0);
   });
 
   it("returns 404 for another teacher's question or a malformed id", async () => {
-    const created = await request(teacher).post('/questions').send(single());
+    const created = await request(teacher)
+      .post('/api/v1/questions')
+      .send(single());
     const id = created.body.data.id;
-    expect((await request(other).get(`/questions/${id}`)).status).toBe(404);
-    expect(
-      (await request(other).put(`/questions/${id}`).send(single())).status,
-    ).toBe(404);
-    expect((await request(other).delete(`/questions/${id}`)).status).toBe(404);
-    expect((await request(teacher).get('/questions/not-a-uuid')).status).toBe(
+    expect((await request(other).get(`/api/v1/questions/${id}`)).status).toBe(
       404,
     );
+    expect(
+      (await request(other).put(`/api/v1/questions/${id}`).send(single()))
+        .status,
+    ).toBe(404);
+    expect(
+      (await request(other).delete(`/api/v1/questions/${id}`)).status,
+    ).toBe(404);
+    expect(
+      (await request(teacher).get('/api/v1/questions/not-a-uuid')).status,
+    ).toBe(404);
   });
 
   it('replaces content and options on update', async () => {
-    const created = await request(teacher).post('/questions').send(single());
+    const created = await request(teacher)
+      .post('/api/v1/questions')
+      .send(single());
     const id = created.body.data.id;
     const res = await request(teacher)
-      .put(`/questions/${id}`)
+      .put(`/api/v1/questions/${id}`)
       .send({
         type: 'TRUE_FALSE',
         content: 'Trái Đất hình cầu?',
@@ -164,10 +210,12 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
   });
 
   it('locks questions used by exams', async () => {
-    const draftOnly = (await request(teacher).post('/questions').send(single()))
-      .body.data.id;
-    const published = (await request(teacher).post('/questions').send(single()))
-      .body.data.id;
+    const draftOnly = (
+      await request(teacher).post('/api/v1/questions').send(single())
+    ).body.data.id;
+    const published = (
+      await request(teacher).post('/api/v1/questions').send(single())
+    ).body.data.id;
     for (const [questionId, status] of [
       [draftOnly, 'DRAFT'],
       [published, 'SCHEDULED'],
@@ -184,30 +232,35 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
       });
     }
 
-    const locked = await request(teacher).get(`/questions/${published}`);
+    const locked = await request(teacher).get(`/api/v1/questions/${published}`);
     expect(locked.body.data.inUse).toBe(true);
     const put = await request(teacher)
-      .put(`/questions/${published}`)
+      .put(`/api/v1/questions/${published}`)
       .send(single());
     expect(put.status).toBe(409);
     expect(put.body.error.code).toBe('QUESTION_IN_USE');
 
     // A DRAFT exam allows editing but still blocks deletion.
     expect(
-      (await request(teacher).put(`/questions/${draftOnly}`).send(single()))
-        .status,
+      (
+        await request(teacher)
+          .put(`/api/v1/questions/${draftOnly}`)
+          .send(single())
+      ).status,
     ).toBe(200);
     expect(
-      (await request(teacher).delete(`/questions/${draftOnly}`)).status,
+      (await request(teacher).delete(`/api/v1/questions/${draftOnly}`)).status,
     ).toBe(409);
   });
 
   it('deletes an unused question', async () => {
-    const id = (await request(teacher).post('/questions').send(single())).body
-      .data.id;
-    expect((await request(teacher).delete(`/questions/${id}`)).status).toBe(
-      204,
+    const id = (await request(teacher).post('/api/v1/questions').send(single()))
+      .body.data.id;
+    expect(
+      (await request(teacher).delete(`/api/v1/questions/${id}`)).status,
+    ).toBe(204);
+    expect((await request(teacher).get(`/api/v1/questions/${id}`)).status).toBe(
+      404,
     );
-    expect((await request(teacher).get(`/questions/${id}`)).status).toBe(404);
   });
 });
