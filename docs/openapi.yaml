@@ -433,7 +433,10 @@ paths:
       tags: [exams]
       operationId: updateExam
       summary: Sửa kỳ thi (thay toàn bộ cấu hình và danh sách câu hỏi)
-      description: 'Role: TEACHER (chủ sở hữu). Chỉ khi DRAFT hoặc SCHEDULED.'
+      description: >-
+        Role: TEACHER (chủ sở hữu). Chỉ được sửa khi DRAFT; bản nháp có thể
+        chưa có câu hỏi. Khi SCHEDULED, RUNNING hoặc ENDED, mọi thay đổi
+        cấu hình và danh sách câu hỏi đều bị từ chối với 409 `EXAM_NOT_EDITABLE`.
       requestBody:
         required: true
         content:
@@ -477,8 +480,11 @@ paths:
       operationId: publishExam
       summary: Công bố kỳ thi (DRAFT → SCHEDULED), mở phòng chờ
       description: >-
-        Role: TEACHER (chủ sở hữu). Kỳ thi phải có ít nhất một câu hỏi. Bắt
-        đầu thi (SCHEDULED → RUNNING) đi qua event WebSocket `exam:start`,
+        Role: TEACHER (chủ sở hữu). Chỉ được publish khi DRAFT và có ít nhất
+        một câu hỏi. Sai trạng thái trả 409 `EXAM_NOT_EDITABLE`; DRAFT chưa
+        có câu hỏi trả 422 `VALIDATION_FAILED` và giữ nguyên trạng thái DRAFT.
+        Sau khi publish, không được sửa cấu hình hoặc danh sách câu hỏi.
+        Bắt đầu thi (SCHEDULED → RUNNING) đi qua event WebSocket `exam:start`,
         không qua REST.
       responses:
         '200':
@@ -492,11 +498,18 @@ paths:
         '409':
           $ref: '#/components/responses/ExamNotEditable'
         '422':
-          description: '`VALIDATION_FAILED` — kỳ thi chưa có câu hỏi'
+          description: '`VALIDATION_FAILED` — kỳ thi DRAFT chưa có câu hỏi, không thể publish'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: VALIDATION_FAILED
+                  message: Kỳ thi phải có ít nhất một câu hỏi trước khi publish
+                  details:
+                    - field: questions
+                      issue: Phải có ít nhất một câu hỏi
   /exams/{examId}/attempts:
     parameters:
       - $ref: '#/components/parameters/ExamId'
@@ -1069,6 +1082,7 @@ components:
 
     ExamInput:
       type: object
+      description: Cấu hình tạo hoặc cập nhật kỳ thi DRAFT; có thể lưu bản nháp chưa có câu hỏi.
       required: [title, durationSec, questions]
       properties:
         title:

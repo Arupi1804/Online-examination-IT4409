@@ -23,6 +23,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 
 - 409: xung đột trạng thái dữ liệu — `EMAIL_TAKEN`, `QUESTION_IN_USE`, `EXAM_NOT_EDITABLE`, `ATTEMPT_LIMIT_REACHED`, `ATTEMPT_ALREADY_SUBMITTED`, `ATTEMPT_NOT_SUBMITTED`.
 - 422: sai thời điểm — `EXAM_NOT_STARTED`, `EXAM_ENDED`, `SUBMIT_TOO_LATE`.
+- 422 `VALIDATION_FAILED`: publish kỳ thi DRAFT chưa có câu hỏi.
 
 ## Câu hỏi
 
@@ -33,7 +34,8 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 ## Kỳ thi
 
 - Vòng đời: `POST /exams` tạo DRAFT → `POST /exams/:id/publish` chuyển SCHEDULED (mở phòng chờ) → giáo viên gửi `exam:start` qua WebSocket chuyển RUNNING, server đặt `startTime = now`, `endTime = now + durationSec` → hết giờ hoặc giáo viên kết thúc chuyển ENDED.
-- Sửa được khi DRAFT hoặc SCHEDULED; xóa chỉ khi DRAFT.
+- Sửa/xóa chỉ khi DRAFT. Khi SCHEDULED, RUNNING hoặc ENDED, sửa cấu hình hoặc danh sách câu hỏi trả 409 `EXAM_NOT_EDITABLE`.
+- DRAFT có thể chưa có câu hỏi. Publish chỉ khi DRAFT và có ít nhất một câu hỏi; sai trạng thái trả 409 `EXAM_NOT_EDITABLE`, DRAFT chưa có câu hỏi trả 422 `VALIDATION_FAILED` và giữ nguyên trạng thái DRAFT. Sau khi publish, không được sửa cấu hình hoặc danh sách câu hỏi.
 - `endTime` là mốc chung của cả kỳ thi (thi đồng loạt): thí sinh vào muộn vẫn kết thúc cùng lúc.
 
 ## Bài làm
