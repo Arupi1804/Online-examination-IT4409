@@ -1,5 +1,7 @@
 # WebSocket event contract
 
+Auth/session được TV1 cung cấp theo [Auth contract](auth-contract.md). TV3 dùng namespace `/exam` trên HTTP server chung và cùng session store; không tạo thêm Socket.IO Server. HTTP middleware gia hạn cookie/session, middleware handshake chỉ đọc và không gia hạn TTL.
+
 Socket.IO xác thực session ở handshake và kiểm tra quyền trên từng event.
 
 | Event                                        | Chiều                              | Mục đích                        |

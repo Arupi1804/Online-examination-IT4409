@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm --filter @online-exam/shared build && vitest run",
+    "test": "pnpm --filter @online-exam/shared build && pnpm --filter @online-exam/server db:generate && vitest run",
     "test:e2e": "playwright test",
     "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
     "infra:up": "docker compose up -d postgres redis",

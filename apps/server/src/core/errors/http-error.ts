@@ -1,6 +1,6 @@
 import type { ApiError } from '@online-exam/shared';
 
-/** Thrown by services; the error handler turns it into `{ error }`. */
+/** Public HTTP errors shared by Auth and business modules. */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
