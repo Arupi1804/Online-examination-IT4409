@@ -1,4 +1,4 @@
-/* PostgreSQL remains authoritative; Prisma owns all realtime data operations. */
+/* TẦNG TRUY CẬP POSTGRESQL CHO NGHIỆP VỤ REALTIME */
 
 import {
   Prisma,
@@ -23,6 +23,10 @@ import {
   lockExpiredExam,
   lockOpenAttempts,
 } from '../../../core/db/locks.js';
+import {
+  gradeAttempt,
+  type GradedQuestion,
+} from '../../attempts/services/grading.js';
 import { RealtimeError } from '../errors.js';
 
 export type Principal = { userId: string; role: Role; sid: string };
@@ -43,6 +47,7 @@ type Attempt = {
   submitted_at: Date | null;
 };
 
+// Chuyển bản ghi Prisma sang cấu trúc kỳ thi dùng trong realtime
 function toExam(row: PrismaExam): Exam {
   return {
     id: row.id,
@@ -55,6 +60,7 @@ function toExam(row: PrismaExam): Exam {
   };
 }
 
+// Chuyển bản ghi Prisma sang cấu trúc bài làm dùng trong realtime
 function toAttempt(row: PrismaAttempt): Attempt {
   return {
     id: row.id,
@@ -65,6 +71,7 @@ function toAttempt(row: PrismaAttempt): Attempt {
   };
 }
 
+// Tạo đồng hồ kỳ thi với thời gian phản hồi hiện tại của server
 export function clock(exam: Exam): ExamClock {
   return {
     examId: exam.id,
@@ -75,11 +82,12 @@ export function clock(exam: Exam): ExamClock {
   };
 }
 
+// PostgreSQL là nguồn dữ liệu chính cho mọi thao tác realtime
 export class RealtimeRepository {
+  // Dùng chung PrismaClient do bootstrap quản lý
   constructor(private readonly prisma: PrismaClient) {}
 
-  // Retry serialization conflicts so concurrent requests retain the old
-  // row-lock behavior: one transition wins and the other observes its result.
+  // Chạy transaction Serializable và thử lại khi các thao tác đồng thời xung đột
   private async serializable<T>(
     work: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
@@ -91,6 +99,7 @@ export class RealtimeRepository {
           timeout: 120_000,
         });
       } catch (error) {
+        // Chỉ thử lại lỗi giao dịch có thể phục hồi; lỗi khác được trả ngay
         if (!isRetryableTransactionError(error) || attempt === 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
       }
@@ -98,12 +107,14 @@ export class RealtimeRepository {
     throw new Error('Unreachable transaction state');
   }
 
+  // Tìm kỳ thi theo ID và báo lỗi nếu không tồn tại
   async exam(examId: string): Promise<Exam> {
     const row = await this.prisma.exam.findUnique({ where: { id: examId } });
     if (!row) throw new RealtimeError('NOT_FOUND', 'Exam not found');
     return toExam(row);
   }
 
+  // Tìm kỳ thi theo mã phòng để phục vụ luồng tham gia phòng
   async examByCode(code: string): Promise<Exam> {
     const row = await this.prisma.exam.findUnique({
       where: { roomCode: code },
@@ -112,11 +123,13 @@ export class RealtimeRepository {
     return toExam(row);
   }
 
+  // Cho admin, giáo viên sở hữu hoặc học sinh có mã phòng/bài làm vào phòng
   async canJoin(
     exam: Exam,
     principal: Principal,
     roomCode?: string,
   ): Promise<void> {
+    // Chủ kỳ thi và admin có quyền truy cập trực tiếp
     if (
       principal.role === 'ADMIN' ||
       (principal.role === 'TEACHER' && exam.owner_id === principal.userId)
@@ -124,6 +137,7 @@ export class RealtimeRepository {
       return;
     if (principal.role !== 'STUDENT')
       throw new RealtimeError('FORBIDDEN', 'Exam access denied');
+    // Mã phòng hợp lệ cho phép học sinh vào; khi kết nối lại dùng bài làm đã có
     if (roomCode === exam.room_code) return;
     const attempt = await this.prisma.attempt.findFirst({
       where: { examId: exam.id, userId: principal.userId },
@@ -132,11 +146,13 @@ export class RealtimeRepository {
     if (!attempt) throw new RealtimeError('FORBIDDEN', 'Exam access denied');
   }
 
+  // Xác nhận người gọi là giáo viên sở hữu kỳ thi trước khi thay đổi trạng thái
   assertTeacher(exam: Exam, principal: Principal): void {
     if (principal.role !== 'TEACHER' || exam.owner_id !== principal.userId)
       throw new RealtimeError('FORBIDDEN', 'Teacher does not own exam');
   }
 
+  // Chuyển kỳ thi SCHEDULED có câu hỏi sang RUNNING trong một transaction
   async start(examId: string, principal: Principal): Promise<Exam> {
     return this.serializable(async (tx) => {
       const current = await tx.exam.findUnique({
@@ -147,7 +163,9 @@ export class RealtimeRepository {
       this.assertTeacher(toExam(current), principal);
       if (current.status !== 'SCHEDULED' || current._count.questions === 0)
         throw new RealtimeError('INVALID_STATE', 'Exam cannot be started');
+      // Dùng giờ DB làm mốc bắt đầu và tính hạn kết thúc chung cho kỳ thi
       const now = await databaseNow(tx);
+      // Kiểm tra lại trạng thái ngay trong lệnh ghi để tránh khởi động hai lần
       const result = await tx.exam.updateMany({
         where: {
           id: examId,
@@ -168,6 +186,7 @@ export class RealtimeRepository {
     });
   }
 
+  // Gia hạn kỳ thi còn RUNNING và chưa hết giờ trong một transaction
   async extend(
     examId: string,
     seconds: number,
@@ -177,6 +196,7 @@ export class RealtimeRepository {
       const current = await tx.exam.findUnique({ where: { id: examId } });
       if (!current) throw new RealtimeError('NOT_FOUND', 'Exam not found');
       this.assertTeacher(toExam(current), principal);
+      // Giờ DB quyết định kỳ thi còn được gia hạn hay không
       const now = await databaseNow(tx);
       if (
         current.status !== 'RUNNING' ||
@@ -187,6 +207,7 @@ export class RealtimeRepository {
           'INVALID_STATE',
           'Exam can no longer be extended',
         );
+      // Điều kiện endTime được kiểm tra lại khi ghi để chặn gia hạn sau hạn chót
       const result = await tx.exam.updateMany({
         where: {
           id: examId,
@@ -205,6 +226,7 @@ export class RealtimeRepository {
     });
   }
 
+  // Đọc bài làm và đáp án đã lưu để học sinh khôi phục trạng thái khi kết nối lại
   async attemptState(
     attemptId: string,
     principal: Principal,
@@ -213,6 +235,7 @@ export class RealtimeRepository {
       where: { id: attemptId },
       include: {
         exam: true,
+        // Sắp xếp ổn định để trạng thái trả về không phụ thuộc thứ tự đọc từ DB
         answers: {
           orderBy: { questionId: 'asc' },
           include: {
@@ -242,6 +265,7 @@ export class RealtimeRepository {
     };
   }
 
+  // Ghi vi phạm của bài làm đang thi sau khi kiểm tra quyền và hạn kỳ thi
   async recordViolation(
     attemptId: string,
     principal: Principal,
@@ -255,6 +279,7 @@ export class RealtimeRepository {
         where: { id: attemptId },
         include: { exam: true },
       });
+      // Kiểm tra thời hạn bằng giờ DB trong cùng transaction với lệnh ghi log
       const now = await databaseNow(tx);
       if (
         !row ||
@@ -272,6 +297,7 @@ export class RealtimeRepository {
     });
   }
 
+  // Xác nhận bài làm thuộc học sinh và còn hoạt động cho các sự kiện realtime
   async activeAttempt(
     attemptId: string,
     principal: Principal,
@@ -283,6 +309,7 @@ export class RealtimeRepository {
     if (!row) throw new RealtimeError('NOT_FOUND', 'Attempt not found');
     if (principal.role !== 'STUDENT' || row.userId !== principal.userId)
       throw new RealtimeError('FORBIDDEN', 'Attempt access denied');
+    // Không nhận sự kiện khi kỳ thi đã hết hạn theo giờ DB
     const now = await databaseNow(this.prisma);
     if (
       row.status !== 'IN_PROGRESS' ||
@@ -294,6 +321,7 @@ export class RealtimeRepository {
     return toAttempt(row);
   }
 
+  // Lấy trạng thái, số câu đã trả lời và vi phạm gần nhất cho dashboard
   async studentUpdate(
     attemptId: string,
   ): Promise<Omit<StudentUpdate, 'online' | 'lastHeartbeat'>> {
@@ -326,6 +354,7 @@ export class RealtimeRepository {
     };
   }
 
+  // Liệt kê bài làm theo thời điểm bắt đầu để dựng danh sách giám sát ổn định
   async monitor(examId: string): Promise<string[]> {
     const rows = await this.prisma.attempt.findMany({
       where: { examId },
@@ -335,6 +364,7 @@ export class RealtimeRepository {
     return rows.map((row) => row.id);
   }
 
+  // Lấy các kỳ thi đang chạy để worker đồng bộ lịch và hiện diện
   async runningExams(): Promise<Exam[]> {
     const rows = await this.prisma.exam.findMany({
       where: { status: 'RUNNING' },
@@ -342,6 +372,7 @@ export class RealtimeRepository {
     return rows.map(toExam);
   }
 
+  // Tìm kỳ thi đã kết thúc nhưng còn bài chưa nộp để worker khôi phục xử lý
   async unfinishedEndedExams(): Promise<Exam[]> {
     const rows = await this.prisma.exam.findMany({
       where: { status: 'ENDED', attempts: { some: { status: 'IN_PROGRESS' } } },
@@ -349,14 +380,16 @@ export class RealtimeRepository {
     return rows.map(toExam);
   }
 
-  private async grade(
+  // Đọc điểm, đáp án đúng và lựa chọn của bài làm trong transaction nộp bài
+  private async loadGradingQuestions(
     tx: Prisma.TransactionClient,
     attemptId: string,
     examId: string,
-  ): Promise<{ score: number; maxScore: number }> {
+  ): Promise<GradedQuestion[]> {
     const questions = await tx.examQuestion.findMany({
       where: { examId },
       select: {
+        questionId: true,
         points: true,
         question: {
           select: {
@@ -369,44 +402,30 @@ export class RealtimeRepository {
         },
       },
     });
-    let score = 0;
-    let maxScore = 0;
-    for (const question of questions) {
-      const points = Number(question.points);
-      maxScore += points;
-      const correct = new Set(
-        question.question.options.map((option) => option.id),
-      );
-      const selected = new Set(
-        question.answers.flatMap((answer) =>
-          answer.selectedOptions.map((selection) => selection.optionId),
-        ),
-      );
-      if (
-        correct.size > 0 &&
-        correct.size === selected.size &&
-        [...correct].every((id) => selected.has(id))
-      )
-        score += points;
-    }
-    return {
-      score: Math.round(score * 100) / 100,
-      maxScore: Math.round(maxScore * 100) / 100,
-    };
+    // Chuẩn hóa dữ liệu Prisma theo đầu vào của gradeAttempt()
+    return questions.map((question) => ({
+      questionId: question.questionId,
+      points: Number(question.points),
+      correctOptionIds: question.question.options.map((option) => option.id),
+      selectedOptionIds: question.answers.flatMap((answer) =>
+        answer.selectedOptions.map((selection) => selection.optionId),
+      ),
+    }));
   }
 
+  // Chấm và chốt một bài làm đã được khóa; trả null nếu bài đã nộp
   private async submitLocked(
     tx: Prisma.TransactionClient,
     attempt: Attempt,
     status: Exclude<AttemptStatus, 'IN_PROGRESS'>,
   ): Promise<Submitted | null> {
     if (attempt.status !== 'IN_PROGRESS') return null;
-    const { score, maxScore } = await this.grade(
-      tx,
-      attempt.id,
-      attempt.exam_id,
+    // Chỉ gradeAttempt quyết định điểm; phần đọc và ghi vẫn ở cùng transaction
+    const { score, maxScore } = gradeAttempt(
+      await this.loadGradingQuestions(tx, attempt.id, attempt.exam_id),
     );
     const submittedAt = await databaseNow(tx);
+    // Điều kiện IN_PROGRESS bảo đảm chỉ một lần chuyển trạng thái thành công
     const result = await tx.attempt.updateMany({
       where: { id: attempt.id, status: 'IN_PROGRESS' },
       data: { status, submittedAt, score, maxScore },
@@ -421,11 +440,13 @@ export class RealtimeRepository {
     };
   }
 
+  // Giáo viên sở hữu kỳ thi ép nộp một bài đang thi, trong transaction có khóa
   async forceSubmit(
     attemptId: string,
     principal: Principal,
   ): Promise<Submitted | null> {
     return this.serializable(async (tx) => {
+      // Khóa bài làm trước khi kiểm tra trạng thái để tránh nộp đồng thời
       await lockAttempt(tx, attemptId);
       const row = await tx.attempt.findUnique({
         where: { id: attemptId },
@@ -440,13 +461,16 @@ export class RealtimeRepository {
     });
   }
 
+  // Tự nộp các bài quá hạn và chuyển kỳ thi sang ENDED khi cần
   async finishExpired(
     examId: string,
   ): Promise<{ exam: Exam; submissions: Submitted[]; ended: boolean } | null> {
     return this.serializable(async (tx) => {
+      // Khóa kỳ thi sau khoảng chờ 5 giây để các worker không chốt đồng thời
       if (!(await lockExpiredExam(tx, examId))) return null;
       const row = await tx.exam.findUnique({ where: { id: examId } });
       if (!row || !['RUNNING', 'ENDED'].includes(row.status)) return null;
+      // Khóa toàn bộ bài chưa nộp trước khi chấm để không trùng với force submit
       await lockOpenAttempts(tx, examId);
       const attempts = await tx.attempt.findMany({
         where: { examId, status: 'IN_PROGRESS' },
@@ -460,6 +484,7 @@ export class RealtimeRepository {
         );
         if (submitted) submissions.push(submitted);
       }
+      // Kỳ thi ENDED vẫn có thể còn bài cần khôi phục sau sự cố
       const ended = row.status === 'RUNNING';
       const exam = ended
         ? await tx.exam.update({
