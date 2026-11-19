@@ -106,14 +106,20 @@ export async function updateQuestion(
   id: string,
   input: QuestionInput,
 ) {
-  // ponytail: check-then-write without a row lock; an exam published in the
-  // same instant can slip through. Lock the question row if that matters.
   return prisma.$transaction(async (tx) => {
-    const current = await tx.question.findFirst({
-      where: { id, ownerId },
+    // Lock the question before checking whether it is in use. Publishing an
+    // exam locks its questions FOR SHARE (docs/api-contract.md), so the two
+    // run one after the other: a publish that commits first is seen by the
+    // check below, and a publish that comes second waits for this edit.
+    const locked = await tx.$queryRaw<unknown[]>`
+      SELECT id FROM questions
+      WHERE id = ${id}::uuid AND owner_id = ${ownerId}::uuid
+      FOR UPDATE`;
+    if (locked.length === 0) throw notFound();
+    const current = await tx.question.findFirstOrThrow({
+      where: { id },
       include,
     });
-    if (!current) throw notFound();
     if (current.examQuestions.length > 0) throw inUse();
     // Delete first: new options reuse the (question_id, order_index) slots.
     await tx.option.deleteMany({ where: { questionId: id } });

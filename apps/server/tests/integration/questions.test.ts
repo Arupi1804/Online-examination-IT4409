@@ -28,6 +28,24 @@ const sessions = new AuthSessions({
 });
 let prisma: PrismaClient;
 
+// Polls until some statement on `questions` is blocked by a row lock.
+async function waitForQuestionLockWait() {
+  for (let i = 0; i < 100; i++) {
+    const [row] = await prisma.$queryRaw<{ waiting: number }[]>`
+      SELECT count(*)::int AS waiting FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'
+        AND query ILIKE '%questions%'`;
+    if (row && row.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const sessions = await prisma.$queryRaw<unknown[]>`
+    SELECT state, wait_event_type, wait_event, left(query, 80) AS query
+    FROM pg_stat_activity WHERE datname = current_database()`;
+  throw new Error(
+    `the edit never waited for the publish lock: ${JSON.stringify(sessions)}`,
+  );
+}
+
 // Stands in for the session middleware: signs the request in as `user`.
 function appAs(user?: { id: string; role: Role }) {
   const apiRouter = Router();
@@ -251,6 +269,66 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
     expect(
       (await request(teacher).delete(`/api/v1/questions/${draftOnly}`)).status,
     ).toBe(409);
+  });
+
+  it('rejects an edit that races the publish of its exam', async () => {
+    const id = (
+      await request(teacher)
+        .post('/api/v1/questions')
+        .send(single('Trước khi publish'))
+    ).body.data.id;
+    const exam = await prisma.exam.create({
+      data: {
+        ownerId: ids.teacher,
+        title: 'Race',
+        roomCode: roomCode(),
+        durationSec: 600,
+        questions: { create: { questionId: id, orderIndex: 0, points: 1 } },
+      },
+    });
+
+    // Publish as docs/api-contract.md requires: lock the exam's questions,
+    // leave DRAFT, and commit only once the edit is waiting for that lock.
+    let commit!: () => void;
+    const committed = new Promise<void>((resolve) => (commit = resolve));
+    let locked!: () => void;
+    const lockHeld = new Promise<void>((resolve) => (locked = resolve));
+    const publish = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT q.id FROM questions q
+          JOIN exam_questions eq ON eq.question_id = q.id
+          WHERE eq.exam_id = ${exam.id}::uuid FOR SHARE OF q`;
+        await tx.exam.update({
+          where: { id: exam.id },
+          data: { status: 'SCHEDULED' },
+        });
+        locked();
+        await committed;
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+
+    const edit = request(teacher)
+      .put(`/api/v1/questions/${id}`)
+      .send(single('Sau khi publish'))
+      .then((res) => res);
+    try {
+      await waitForQuestionLockWait();
+    } finally {
+      commit(); // never leave the publish holding its locks
+      await publish;
+    }
+
+    const res = await edit;
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('QUESTION_IN_USE');
+    const stored = await prisma.question.findUniqueOrThrow({
+      where: { id },
+      include: { options: true },
+    });
+    expect(stored.content).toBe('Trước khi publish');
+    expect(stored.options).toHaveLength(3);
   });
 
   it('deletes an unused question', async () => {

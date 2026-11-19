@@ -28,6 +28,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 ## Câu hỏi
 
 - Câu hỏi nằm trong kỳ thi khác DRAFT (`inUse: true`) bị khóa sửa/xóa để kết quả cũ không đổi. Muốn sửa thì tạo câu mới.
+- Chống sửa chen ngang lúc publish: sửa câu hỏi khóa dòng `questions` bằng `SELECT … FOR UPDATE` rồi mới kiểm tra `inUse`, trong cùng transaction với phần ghi. Publish (và mọi thao tác đưa kỳ thi ra khỏi DRAFT) phải khóa các câu hỏi của kỳ thi bằng `FOR SHARE` trước khi đổi trạng thái. Publish xong trước thì lệnh sửa đang chờ nhận 409 `QUESTION_IN_USE`; sửa xong trước thì publish chờ rồi chạy tiếp.
 - Câu hỏi nằm trong bất kỳ kỳ thi nào (kể cả DRAFT) không xóa được.
 - Sửa câu hỏi thay toàn bộ đáp án; `options[].id` cũ không còn dùng được.
 
