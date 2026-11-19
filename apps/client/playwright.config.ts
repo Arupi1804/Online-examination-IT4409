@@ -11,7 +11,11 @@ export default defineConfig({
   use: { baseURL: 'http://localhost:5174' },
   webServer: {
     command: 'pnpm dev --port 5174',
-    env: { VITE_USE_MOCK: 'false', VITE_API_URL: '' },
+    env: {
+      VITE_USE_MOCK: 'false',
+      VITE_API_URL: '',
+      VITE_REALTIME_URL: 'http://localhost:5190',
+    },
     url: 'http://localhost:5174',
     reuseExistingServer: false,
     timeout: 60000,
