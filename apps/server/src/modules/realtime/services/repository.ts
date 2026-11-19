@@ -145,17 +145,14 @@ export class RealtimeRepository {
       });
       if (!current) throw new RealtimeError('NOT_FOUND', 'Exam not found');
       this.assertTeacher(toExam(current), principal);
-      if (
-        !['DRAFT', 'SCHEDULED'].includes(current.status) ||
-        current._count.questions === 0
-      )
+      if (current.status !== 'SCHEDULED' || current._count.questions === 0)
         throw new RealtimeError('INVALID_STATE', 'Exam cannot be started');
       const now = await databaseNow(tx);
       const result = await tx.exam.updateMany({
         where: {
           id: examId,
           ownerId: principal.userId,
-          status: { in: ['DRAFT', 'SCHEDULED'] },
+          status: 'SCHEDULED',
           durationSec: current.durationSec,
           questions: { some: {} },
         },
@@ -219,7 +216,7 @@ export class RealtimeRepository {
         answers: {
           orderBy: { questionId: 'asc' },
           include: {
-            selections: {
+            selectedOptions: {
               orderBy: { optionId: 'asc' },
               select: { optionId: true },
             },
@@ -237,7 +234,9 @@ export class RealtimeRepository {
       submittedAt: row.submittedAt?.toISOString() ?? null,
       answers: row.answers.map((answer) => ({
         questionId: answer.questionId,
-        optionIds: answer.selections.map((selection) => selection.optionId),
+        optionIds: answer.selectedOptions.map(
+          (selection) => selection.optionId,
+        ),
       })),
       clock: clock(toExam(row.exam)),
     };
@@ -366,7 +365,7 @@ export class RealtimeRepository {
         },
         answers: {
           where: { attemptId },
-          select: { selections: { select: { optionId: true } } },
+          select: { selectedOptions: { select: { optionId: true } } },
         },
       },
     });
@@ -380,7 +379,7 @@ export class RealtimeRepository {
       );
       const selected = new Set(
         question.answers.flatMap((answer) =>
-          answer.selections.map((selection) => selection.optionId),
+          answer.selectedOptions.map((selection) => selection.optionId),
         ),
       );
       if (

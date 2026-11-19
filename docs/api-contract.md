@@ -28,6 +28,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 ## Câu hỏi
 
 - Câu hỏi nằm trong kỳ thi khác DRAFT (`inUse: true`) bị khóa sửa/xóa để kết quả cũ không đổi. Muốn sửa thì tạo câu mới.
+- Chống sửa chen ngang lúc publish: sửa câu hỏi khóa dòng `questions` bằng `SELECT … FOR UPDATE` rồi mới kiểm tra `inUse`, trong cùng transaction với phần ghi. Publish (và mọi thao tác đưa kỳ thi ra khỏi DRAFT) phải khóa các câu hỏi của kỳ thi bằng `FOR SHARE` trước khi đổi trạng thái. Publish xong trước thì lệnh sửa đang chờ nhận 409 `QUESTION_IN_USE`; sửa xong trước thì publish chờ rồi chạy tiếp.
 - Câu hỏi nằm trong bất kỳ kỳ thi nào (kể cả DRAFT) không xóa được.
 - Sửa câu hỏi thay toàn bộ đáp án; `options[].id` cũ không còn dùng được.
 
@@ -49,6 +50,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 
 - Một câu được trọn điểm khi tập đáp án chọn trùng khớp tập đáp án đúng; ngược lại 0 điểm. Không có điểm từng phần cho MULTIPLE.
 - `score` = tổng điểm câu đúng, `maxScore` = tổng `points` của kỳ thi; làm tròn 2 chữ số.
+- Luật này chỉ nằm ở `gradeAttempt()` (`apps/server/src/modules/attempts/services/grading.ts`, TV2). Nộp bài qua REST và auto/force submit của realtime đều gọi hàm này với dữ liệu đọc trong transaction của mình; không module nào tự viết lại cách chấm.
 - Thí sinh thấy điểm ngay khi nộp; đáp án đúng và lời giải chỉ hiện sau khi kỳ thi ENDED (tránh lộ đáp án cho người đang thi).
 
 ## Thống kê

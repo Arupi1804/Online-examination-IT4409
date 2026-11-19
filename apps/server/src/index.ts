@@ -4,15 +4,15 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
-import type { NextFunction } from 'express';
+import { Router, type NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
 import { z } from 'zod';
 import { WS_NAMESPACE } from '@online-exam/shared';
 import { createApp } from './app.js';
+import { findWorkspaceEnv } from './core/config/workspace-env.js';
 import {
   AuthSessions,
   AuthSessionStore,
@@ -20,8 +20,9 @@ import {
   PrismaAuthRepository,
 } from './modules/auth/index.js';
 import { mountRealtime } from './modules/realtime/index.js';
+import { createQuestionsRouter } from './modules/questions/controllers/questions.controller.js';
 
-config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
+config({ path: findWorkspaceEnv(import.meta.url) ?? '.env' });
 const env = z
   .object({
     SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -84,9 +85,15 @@ try {
       .update('oe-auth-rate-limit-v1')
       .digest('hex'),
   });
+  const apiRouter = Router();
+  apiRouter.use(
+    '/questions',
+    createQuestionsRouter(prisma, sessions.requireRoles('TEACHER')),
+  );
   const server = createServer(
     createApp(settings.CLIENT_ORIGIN, {
       authRouter,
+      apiRouter,
       sessionMiddleware: sessions.sessionMiddleware,
       trustProxyHops: settings.TRUST_PROXY_HOPS,
     }),

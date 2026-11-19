@@ -70,8 +70,20 @@ describe.skipIf(!process.env.AUTH_DATABASE_URL)(
         });
         await prisma.option.createMany({
           data: [
-            { id: correctId, questionId, content: 'Yes', isCorrect: true },
-            { id: incorrectId, questionId, content: 'No', isCorrect: false },
+            {
+              id: correctId,
+              questionId,
+              content: 'Yes',
+              isCorrect: true,
+              orderIndex: 0,
+            },
+            {
+              id: incorrectId,
+              questionId,
+              content: 'No',
+              isCorrect: false,
+              orderIndex: 1,
+            },
           ],
         });
         await prisma.exam.create({
@@ -94,6 +106,17 @@ describe.skipIf(!process.env.AUTH_DATABASE_URL)(
         });
         await prisma.examQuestion.create({
           data: { examId, questionId, orderIndex: 0, points: 2.5 },
+        });
+        await expect(repository.start(examId, teacher)).rejects.toMatchObject({
+          code: 'INVALID_STATE',
+        });
+        expect(
+          (await prisma.exam.findUniqueOrThrow({ where: { id: examId } }))
+            .status,
+        ).toBe('DRAFT');
+        await prisma.exam.update({
+          where: { id: examId },
+          data: { status: 'SCHEDULED' },
         });
         await expect(repository.start(examId, student)).rejects.toMatchObject({
           code: 'FORBIDDEN',
