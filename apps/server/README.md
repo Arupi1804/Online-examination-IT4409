@@ -10,4 +10,11 @@ Auth theo `core-openapi`: `/api/v1/auth/register`, `/login`, `/me`, `/logout`. R
 
 Login đếm mọi request theo IP (30/15 phút), nhưng chỉ đếm lần sai theo tài khoản (5/15 phút). Login thành công reset counter tài khoản có điều kiện; không reset IP. Đủ ngưỡng sai thì request tiếp theo bị chặn đến hết cửa sổ, kể cả mật khẩu đúng. Đăng ký giới hạn 20 request hợp lệ về cấu trúc/IP/15 phút.
 
-`prisma/schema.prisma` ánh xạ các bảng SQL hiện có để generate client; build/dev/typecheck tự generate. TV2 tiếp tục quản lý baseline và migration; không chạy `db push` hoặc migration/reset lên database cũ từ schema chưa baseline. CHECK và partial indexes vẫn nằm trong SQL gốc. Auth không thay đổi schema database.
+`prisma/schema.prisma` phản chiếu `database/init/*.sql` (xem `database/README.md`); không dùng Prisma Migrate. Prisma CLI không tự đọc `.env` ở root, nên gọi qua script `prisma` của package này:
+
+```powershell
+pnpm --filter @online-exam/server db:generate   # sinh Prisma Client sau khi sửa schema
+pnpm --filter @online-exam/server db:validate
+pnpm --filter @online-exam/server db:diff       # so schema.prisma với DB đang chạy
+pnpm --filter @online-exam/server prisma studio # xem dữ liệu
+```
