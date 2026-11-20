@@ -1,16 +1,24 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import './index.css';
 import App from './App';
 import { AuthProvider } from './app/providers/AuthProvider';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
+// A data router enables useBlocker for unsaved answers. Page URLs and the
+// existing route components stay the same.
+const router = createBrowserRouter([
+  {
+    path: '*',
+    element: (
       <AuthProvider>
         <App />
       </AuthProvider>
-    </BrowserRouter>
+    ),
+  },
+]);
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <RouterProvider router={router} />
   </StrictMode>,
 );

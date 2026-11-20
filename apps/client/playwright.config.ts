@@ -2,6 +2,8 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // Realtime fixtures share a local port and are isolated by test file.
+  workers: 1,
   projects: [
     {
       name: 'chromium',

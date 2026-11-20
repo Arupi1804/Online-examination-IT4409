@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, Navigate, Outlet } from 'react-router-dom';
 import { GraduationCap, LoaderCircle, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ export default function StudentLayout() {
   const { user, checking, sessionError, retrySession, logout } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState('');
+  const beforeLogout = useRef<(() => Promise<boolean>) | null>(null);
   if (checking)
     return (
       <main
@@ -45,6 +46,12 @@ export default function StudentLayout() {
     setLoggingOut(true);
     setLogoutError('');
     try {
+      if (beforeLogout.current && !(await beforeLogout.current())) {
+        setLogoutError(
+          'Còn đáp án chưa lưu thành công. Bạn hãy thử lưu lại hoặc rời trang làm bài trước khi đăng xuất.',
+        );
+        return;
+      }
       await logout();
     } catch (error) {
       setLogoutError(getAuthErrorMessage(error));
@@ -100,7 +107,7 @@ export default function StudentLayout() {
         </p>
       )}
       <main className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
-        <Outlet />
+        <Outlet context={{ beforeLogout }} />
       </main>
     </div>
   );

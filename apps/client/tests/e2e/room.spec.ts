@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
+import { buildPaper } from '../fixtures/exam-fixture';
 
 // A protocol fixture owned by the frontend tests, not the project's backend.
 const examId = 'c9ec68a2-0000-4000-8000-000000000001';
@@ -85,6 +86,8 @@ test.beforeEach(async ({ page }) => {
     } else if (path === '/api/v1/auth/logout') {
       signedIn = false;
       await route.fulfill({ status: 204 });
+    } else if (path === `/api/v1/exams/${examId}/attempts`) {
+      await route.fulfill({ json: { data: buildPaper(2700) } });
     } else if (path === '/api/v1/exams/join') {
       const body = route.request().postDataJSON();
       expect(Object.keys(body)).toEqual(['roomCode']);
@@ -223,8 +226,14 @@ test('room restores after reload, refreshes authoritative counts and starts only
   await expect(page).toHaveURL(`/exam/${examId}/waiting`);
   io.emit('exam:started', clock());
   await expect(page).toHaveURL(`/exam/${examId}/take`);
+  await expect(
+    page.getByRole('heading', { name: 'Bài thi của bạn', exact: true }),
+  ).toBeVisible();
+  expect(restRequests.some((path) => path.endsWith('/attempts'))).toBe(true);
+  await page
+    .getByRole('link', { name: 'Online Examination', exact: true })
+    .click();
   await expect.poll(() => io.engine.clientsCount).toBe(0);
-  expect(restRequests.some((path) => path.endsWith('/attempts'))).toBe(false);
   expect(pageErrors).toEqual([]);
 });
 
@@ -286,7 +295,13 @@ test('arriving after the exam starts enters the take route after realtime confir
     .click();
   await expect(page).toHaveURL(`/exam/${examId}/take`);
   expect(joins.length).toBeGreaterThan(0);
-  expect(restRequests.some((path) => path.endsWith('/attempts'))).toBe(false);
+  await expect(
+    page.getByRole('heading', { name: 'Bài thi của bạn', exact: true }),
+  ).toBeVisible();
+  expect(restRequests.some((path) => path.endsWith('/attempts'))).toBe(true);
+  await page
+    .getByRole('link', { name: 'Online Examination', exact: true })
+    .click();
   await expect.poll(() => io.engine.clientsCount).toBe(0);
 });
 
