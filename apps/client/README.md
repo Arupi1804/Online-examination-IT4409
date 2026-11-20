@@ -67,7 +67,8 @@ và cho phép thử lại. Các request REST của bài thi có timeout 12 giây
 và bài làm, không gửi lên API. Khi tải lại, đáp án lấy từ backend; cờ đánh dấu
 lấy từ trình duyệt. Chuyển trang hoặc đăng xuất khi có đáp án chưa lưu sẽ chờ
 lưu hoặc cho biết lỗi. Tải lại/đóng tab khi còn thay đổi chưa lưu có cảnh báo
-của trình duyệt. Không có hàng đợi offline bền vững trong tuần 4.
+của trình duyệt. Đáp án chưa gửi được lưu riêng theo tài khoản và bài làm
+trong sessionStorage để khôi phục sau khi tải lại trang.
 
 Đồng hồ dùng `endTime`, `serverTime`, thời gian đơn điệu `performance.now()`
 và ước lượng nửa RTT khi nhận đề/ACK. Đồng bộ `timer:sync`, `exam:extended`
@@ -77,8 +78,8 @@ công, trạng thái đã nộp từ API hoặc `attempt:submitted` đúng bài 
 
 Nút **Nộp bài** mở xác nhận với số câu đã/chưa trả lời và câu đánh dấu. Khi
 xác nhận, chờ toàn bộ đáp án lưu thành công rồi gọi
-`POST /api/v1/attempts/:attemptId/submit`. Trang xác nhận nộp không hiển thị
-điểm/đáp án đúng; trang kết quả và proctoring thuộc tuần 5.
+`POST /api/v1/attempts/:attemptId/submit`. Sau khi server xác nhận, chuyển sang
+`/exam/:examId/results?attemptId=...` để lấy kết quả từ API.
 
 Router dùng `createBrowserRouter` để chặn điều hướng khi có thay đổi chưa lưu;
 giữ nguyên URL các trang hiện có. REST tiếp tục theo OpenAPI trên `origin/dev`,
@@ -91,6 +92,51 @@ không tự tạo lượt mới. Để thử lại từ đầu, xóa mục `oe:d
 ứng trong sessionStorage qua DevTools. Việc mô phỏng tự chốt bài khi hết giờ
 chỉ nằm trong mock development; backend thật chịu trách nhiệm chốt/chấm bài.
 
+## Kết quả và khôi phục kết nối
+
+Trang kết quả gọi `GET /api/v1/attempts/:attemptId/result`, kiểm tra ID bài làm
+và kỳ thi trước khi hiển thị. Có điểm, thời gian làm bài và hình thức nộp
+(thủ công, tự chốt hoặc giáo viên chốt). Không gọi POST tạo bài mới để tìm
+kết quả. Tham chiếu bài làm gần nhất được lưu theo tài khoản để hỗ trợ URL
+cũ không có query; sau nộp, URL luôn có attemptId nên vẫn tải lại được khi
+trình duyệt chặn storage.
+
+Điểm hiển thị ngay theo response của server. Khi `questions: null`, chưa
+hiển thị đáp án đúng/lời giải hay tự suy ra số câu đúng. Khi server công bố
+chi tiết sau khi kỳ thi ENDED, nút **Tải lại kết quả** cho phép xem từng câu,
+đáp án đã chọn, đáp án đúng, điểm từng câu và lời giải. Điểm một phần lấy từ
+`earnedPoints`, không chấm lại trên frontend. Response thiếu điểm, sai schema
+hoặc không khớp ID được báo lỗi, không thay bằng điểm 0.
+
+Sau mỗi kết nối/reconnect, Socket.IO gửi `room:join` rồi `attempt:rejoin`.
+Frontend xác nhận trạng thái bài, đồng hồ và đáp án đã lưu trước khi gửi
+tiếp đáp án đang chờ. Lựa chọn chưa gửi được giữ trên trang và trong
+sessionStorage; nếu storage bị chặn, UI nhắc giữ trang mở. Đồng hồ vẫn chạy
+khi offline, không cho nộp khi chưa xác nhận lại kết nối. Bài đã bị chốt sẽ
+chuyển sang kết quả và xóa hàng đợi cục bộ, không gửi lại đáp án trễ hạn.
+Đáp án đã được server lưu không bị lựa chọn cũ từ cache ghi đè trừ khi
+câu đó có thay đổi chưa được xác nhận trên chính phiên trình duyệt này.
+
+## Chuyển trang và toàn màn hình
+
+Trong lúc bài còn được phép làm, frontend quan sát `visibilitychange` và
+`fullscreenchange`, gửi `TAB_BLUR` hoặc `FULLSCREEN_EXIT` qua
+`proctor:violation`. Payload chỉ có `attemptId`, `type`, `clientAt`; server
+quyết định danh tính, thời điểm ghi log và chính sách xử lý. Không dùng
+window blur làm bằng chứng chuyển tab; mất mạng không tự tạo vi phạm.
+
+Nút **Vào toàn màn hình** dùng Fullscreen API từ thao tác trực tiếp của người
+dùng. Không ghi thoát fullscreen trước khi thực sự vào fullscreen; trình
+duyệt không hỗ trợ/từ chối sẽ có thông báo và vẫn cho làm bài. Giám sát dừng
+khi hết giờ, đang nộp hoặc bài đã được chốt; không tự nộp bài hay áp dụng
+hình phạt vì một sự kiện trình duyệt.
+
+`proctor:heartbeat` gửi sau khi rejoin và mỗi 10 giây khi bài còn thời gian.
+UI phân biệt số sự kiện phát hiện trên thiết bị với số đã nhận ACK từ server.
+Không tự phát lại log chưa rõ đã ghi hay chưa sau mất kết nối: contract hiện
+chưa có khóa chống ghi log trùng. Nhật ký frontend không thay thế log trên
+server và sẽ được khởi tạo lại khi tải lại trang.
+
 ```powershell
 pnpm.cmd check
 pnpm.cmd test:e2e
@@ -98,9 +144,11 @@ pnpm.cmd test:e2e
 
 Unit test dùng fetch giả lập, độc lập với URL backend trong `.env.local`.
 Các E2E test dùng HTTP response fixtures theo contract Auth/ExamJoinInfo
-và AttemptPaper/SavedAnswer/submit cùng Socket.IO server test tại cổng 5190.
+và AttemptPaper/SavedAnswer/submit/result cùng Socket.IO server test tại cổng 5190.
 Kiểm tra ACK, sự kiện, reconnect, timeout, thứ tự autosave, khôi phục bài,
-nộp bài sau khi lưu xong, khóa khi hết giờ và dọn kết nối. Đây là kiểm chứng frontend với backend
+nộp bài sau khi lưu xong, khóa khi hết giờ, mất mạng/reload, heartbeat,
+chuyển tab/fullscreen, bảo vệ kết quả chưa công bố và dọn kết nối.
+Đây là kiểm chứng frontend với backend
 giả lập, chưa thay thế kiểm tra tích hợp backend thật. Cần để trống cổng
 5174 và 5190 khi chạy E2E.
 Để dùng Edge đã cài, đặt `$env:PLAYWRIGHT_CHANNEL = "msedge"` trước khi chạy.

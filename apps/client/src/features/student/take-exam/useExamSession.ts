@@ -6,42 +6,59 @@ import {
   type ClockSample,
   type LoadedAttempt,
   type Submission,
+  type ExamConnection,
+  type ProctorEvent,
 } from './exam-model';
 import { examService } from './exam-service';
+import {
+  clearAttemptDraft,
+  readAttemptDraft,
+  saveAttemptDraft,
+} from './attempt-draft';
 
 interface Runtime {
   active: boolean;
   controller: AnswerAutosaver;
-  disconnect?: () => void;
+  connection?: ExamConnection;
   reconnect(): void;
 }
 export interface Receipt {
   submittedAt: string | null;
 }
 
-export function useExamSession(loaded: LoadedAttempt) {
+export function useExamSession(loaded: LoadedAttempt, userId: string) {
   const { paper } = loaded;
+  const [draft] = useState(() => readAttemptDraft(userId, paper));
   const [answers, setAnswers] = useState<AnswerSnapshot>(() => ({
     answers: Object.fromEntries(
       paper.questions.map((question) => [
         question.questionId,
-        paper.answers.find(
-          (answer) => answer.questionId === question.questionId,
-        )?.selectedOptionIds ?? [],
+        draft[question.questionId] ??
+          paper.answers.find(
+            (answer) => answer.questionId === question.questionId,
+          )?.selectedOptionIds ??
+          [],
       ]),
     ),
     statuses: Object.fromEntries(
       paper.questions.map((question) => [
         question.questionId,
-        'saved' as const,
+        draft[question.questionId] ? ('queued' as const) : ('saved' as const),
       ]),
     ),
-    pendingCount: 0,
+    pendingCount: Object.keys(draft).length,
     failedCount: 0,
+    queuedCount: Object.keys(draft).length,
   }));
   const [clock, setClock] = useState(loaded.clock);
   const clockRef = useRef(clock);
   const [connected, setConnected] = useState(false);
+  const connectedRef = useRef(false);
+  const [browserOnline, setBrowserOnline] = useState(
+    navigator.onLine !== false,
+  );
+  const [draftStored, setDraftStored] = useState(true);
+  const persistDraft = useRef(true);
   const [connectionError, setConnectionError] = useState<unknown>(null);
   const [fatalError, setFatalError] = useState<unknown>(null);
   const [closed, setClosed] = useState(false);
@@ -58,11 +75,16 @@ export function useExamSession(loaded: LoadedAttempt) {
   const finishRef = useRef<(submission?: Submission) => void>(() => undefined);
 
   useEffect(() => {
-    if (paper.status !== 'IN_PROGRESS') return;
+    if (paper.status !== 'IN_PROGRESS') {
+      clearAttemptDraft(userId, paper.attemptId);
+      return;
+    }
     let active = true;
     terminal.current = false;
     const controller = new AnswerAutosaver({
       paper,
+      pending: draft,
+      paused: true,
       save: (questionId, selected) =>
         examService.save(paper.attemptId, questionId, selected),
       canSave: () =>
@@ -72,7 +94,11 @@ export function useExamSession(loaded: LoadedAttempt) {
         !closedRef.current &&
         remainingSeconds(clockRef.current) > 0,
       onChange: (snapshot) => {
-        if (active && !terminal.current) setAnswers(snapshot);
+        if (active && !terminal.current) {
+          if (persistDraft.current)
+            setDraftStored(saveAttemptDraft(userId, paper, snapshot));
+          setAnswers(snapshot);
+        }
       },
       onError: handleError,
     });
@@ -84,15 +110,21 @@ export function useExamSession(loaded: LoadedAttempt) {
       if (!active || terminal.current) return;
       terminal.current = true;
       controller.dispose();
-      session.disconnect?.();
+      clearAttemptDraft(userId, paper.attemptId);
+      session.connection?.disconnect();
       setReceipt({ submittedAt: submission?.submittedAt ?? null });
     }
     finishRef.current = finish;
     function handleError(error: unknown) {
       if (!active) return;
       if (hasExamErrorCode(error, 'ATTEMPT_ALREADY_SUBMITTED')) finish();
-      else if (isExamAuthError(error) || hasExamErrorCode(error, 'FORBIDDEN')) {
+      else if (
+        isExamAuthError(error) ||
+        hasExamErrorCode(error, 'FORBIDDEN') ||
+        hasExamErrorCode(error, 'RESPONSE_MISMATCH')
+      ) {
         fatal.current = true;
+        controller.pause();
         setFatalError(error);
       } else if (
         hasExamErrorCode(error, 'EXAM_ENDED') ||
@@ -117,19 +149,37 @@ export function useExamSession(loaded: LoadedAttempt) {
       if (incoming.status === 'ENDED') {
         closedRef.current = true;
         setClosed(true);
+      } else if (remainingSeconds(incoming) > 0) {
+        closedRef.current = false;
+        setClosed(false);
       }
     }
     function connect() {
       if (!active || terminal.current) return;
-      session.disconnect?.();
+      session.connection?.disconnect();
       setConnectionError(null);
       setConnected(false);
-      session.disconnect = examService.watch(paper, {
+      connectedRef.current = false;
+      controller.pause();
+      session.connection = examService.watch(paper, {
+        onRecovered(state) {
+          if (!active || terminal.current) return;
+          if (
+            state.attemptId !== paper.attemptId ||
+            state.examId !== paper.examId
+          )
+            throw new ExamError('RESPONSE_MISMATCH');
+          controller.resume(state.answers);
+        },
         onClock: syncClock,
         onSubmitted: finish,
         onConnection(value) {
           if (active) {
-            setConnected(value);
+            const ready = value;
+            if (ready) setBrowserOnline(true);
+            connectedRef.current = ready;
+            setConnected(ready);
+            if (!ready) controller.pause();
             if (value) setConnectionError(null);
           }
         },
@@ -141,15 +191,30 @@ export function useExamSession(loaded: LoadedAttempt) {
         },
       });
     }
+    function offline() {
+      setBrowserOnline(false);
+      connectedRef.current = false;
+      setConnected(false);
+      controller.pause();
+      connect();
+    }
+    function online() {
+      setBrowserOnline(true);
+      connect();
+    }
+    window.addEventListener('offline', offline);
+    window.addEventListener('online', online);
     connect();
     return () => {
       active = false;
       session.active = false;
       controller.dispose();
-      session.disconnect?.();
+      session.connection?.disconnect();
+      window.removeEventListener('offline', offline);
+      window.removeEventListener('online', online);
       if (runtime.current === session) runtime.current = null;
     };
-  }, [paper]);
+  }, [paper, userId, draft]);
 
   useEffect(() => {
     if (receipt || (!answers.pendingCount && !answers.failedCount)) return;
@@ -165,6 +230,7 @@ export function useExamSession(loaded: LoadedAttempt) {
     const session = runtime.current;
     if (
       !session ||
+      !connectedRef.current ||
       submittingRef.current ||
       terminal.current ||
       fatal.current ||
@@ -213,6 +279,8 @@ export function useExamSession(loaded: LoadedAttempt) {
     ...answers,
     clock,
     connected,
+    browserOnline,
+    draftStored,
     connectionError,
     fatalError,
     closed,
@@ -223,7 +291,31 @@ export function useExamSession(loaded: LoadedAttempt) {
       if (!submittingRef.current)
         runtime.current?.controller.choose(questionId, selected);
     },
-    retrySaving: () => runtime.current?.controller.retryFailed(),
+    retrySaving() {
+      if (!connectedRef.current) runtime.current?.reconnect();
+      else runtime.current?.controller.retryFailed();
+    },
+    discardPending() {
+      persistDraft.current = false;
+      clearAttemptDraft(userId, paper.attemptId);
+      runtime.current?.controller.dispose();
+    },
+    report(type: ProctorEvent, clientAt: string): Promise<void> {
+      const session = runtime.current;
+      if (
+        !session?.active ||
+        terminal.current ||
+        fatal.current ||
+        closedRef.current ||
+        !connectedRef.current ||
+        remainingSeconds(clockRef.current) === 0
+      )
+        return Promise.reject(new ExamError('REALTIME_DISCONNECTED'));
+      return (
+        session.connection?.report(type, clientAt) ??
+        Promise.reject(new ExamError('REALTIME_DISCONNECTED'))
+      );
+    },
     reconnect: () => runtime.current?.reconnect(),
     submit,
     flush: () =>

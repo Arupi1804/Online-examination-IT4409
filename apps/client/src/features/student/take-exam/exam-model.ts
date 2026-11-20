@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AttemptResult } from '../results/result-model.ts';
 
 const id = z.string().uuid();
 export const isoTime = z.string().datetime({ offset: true });
@@ -76,6 +77,42 @@ export type PaperQuestion = z.infer<typeof paperQuestionSchema>;
 export type AttemptPaper = z.infer<typeof attemptPaperSchema>;
 export type SavedAnswer = z.infer<typeof savedAnswerSchema>;
 export type Submission = z.infer<typeof submissionSchema>;
+export const recoveredAttemptSchema = z
+  .object({
+    attemptId: id,
+    examId: id,
+    status: attemptStatusSchema,
+    submittedAt: isoTime.nullable(),
+    answers: z.array(
+      z.object({ questionId: id, optionIds: selectedOptionsSchema }),
+    ),
+    clock: z.object({
+      examId: id,
+      status: z.enum(['DRAFT', 'SCHEDULED', 'RUNNING', 'ENDED']),
+      startTime: isoTime.nullable(),
+      endTime: isoTime.nullable(),
+      serverTime: isoTime,
+    }),
+  })
+  .superRefine((state, ctx) => {
+    if (
+      state.clock.examId !== state.examId ||
+      (state.status !== 'IN_PROGRESS' && !state.submittedAt) ||
+      (state.status === 'IN_PROGRESS' &&
+        (!state.clock.endTime ||
+          !state.clock.startTime ||
+          !['RUNNING', 'ENDED'].includes(state.clock.status))) ||
+      new Set(state.answers.map((answer) => answer.questionId)).size !==
+        state.answers.length
+    )
+      ctx.addIssue({ code: 'custom', message: 'Invalid recovered state' });
+  });
+export type RecoveredAttempt = z.infer<typeof recoveredAttemptSchema>;
+export type ProctorEvent = 'TAB_BLUR' | 'FULLSCREEN_EXIT';
+export interface ExamConnection {
+  disconnect(): void;
+  report(type: ProctorEvent, clientAt: string): Promise<void>;
+}
 export interface ClockSample {
   examId: string;
   status: 'RUNNING' | 'ENDED';
@@ -89,6 +126,7 @@ export interface LoadedAttempt {
   clock: ClockSample;
 }
 export interface ExamCallbacks {
+  onRecovered(state: RecoveredAttempt): void;
   onClock(clock: ClockSample): void;
   onSubmitted(submission: Submission): void;
   onConnection(connected: boolean): void;
@@ -102,7 +140,12 @@ export interface ExamService {
     selectedOptionIds: string[],
   ): Promise<SavedAnswer>;
   submit(attemptId: string): Promise<Submission>;
-  watch(paper: AttemptPaper, callbacks: ExamCallbacks): () => void;
+  watch(paper: AttemptPaper, callbacks: ExamCallbacks): ExamConnection;
+  result(
+    userId: string,
+    examId: string,
+    attemptId: string,
+  ): Promise<AttemptResult>;
 }
 
 export function validSelection(question: PaperQuestion, selected: string[]) {

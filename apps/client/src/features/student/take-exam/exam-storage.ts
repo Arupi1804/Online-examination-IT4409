@@ -46,3 +46,31 @@ export function saveExamUI(
     /* Marking remains available in memory. */
   }
 }
+
+export function saveAttemptReference(
+  userId: string,
+  examId: string,
+  attemptId: string,
+) {
+  try {
+    sessionStorage.setItem(
+      `oe:student:attempt:${userId}:${examId}`,
+      z.string().uuid().parse(attemptId),
+    );
+  } catch {
+    /* URL also carries the attempt after submission. */
+  }
+}
+export function readAttemptReference(
+  userId: string,
+  examId: string,
+): string | null {
+  try {
+    return z
+      .string()
+      .uuid()
+      .parse(sessionStorage.getItem(`oe:student:attempt:${userId}:${examId}`));
+  } catch {
+    return null;
+  }
+}

@@ -57,6 +57,12 @@ export function getExamErrorMessage(error: unknown): string {
         'Thông tin bài làm chưa hợp lệ. Bạn hãy thử kết nối lại.',
       REALTIME_TIMEOUT:
         'Máy chủ chưa phản hồi đồng bộ thời gian. Bạn có thể thử kết nối lại.',
+      REALTIME_DISCONNECTED:
+        'Chưa có kết nối với phòng thi. Bạn hãy kết nối lại để gửi dữ liệu.',
+      ATTEMPT_NOT_SUBMITTED:
+        'Bài làm chưa được máy chủ xác nhận đã nộp. Bạn có thể kiểm tra lại hoặc tiếp tục làm bài nếu còn thời gian.',
+      RESULT_REFERENCE_MISSING:
+        'Chưa xác định được bài làm cần xem kết quả. Bạn hãy mở kết quả từ bài thi đã nộp.',
     };
     const message = messages[error.code ?? ''];
     if (message) return message;

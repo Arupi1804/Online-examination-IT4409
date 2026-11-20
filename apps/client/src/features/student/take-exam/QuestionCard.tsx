@@ -141,11 +141,13 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
             )}
             {saveStatus === 'saving'
               ? 'Đang lưu câu này...'
-              : saveStatus === 'error'
-                ? 'Câu này chưa lưu thành công'
-                : selected.length
-                  ? 'Đáp án đã được lưu'
-                  : 'Chưa chọn đáp án'}
+              : saveStatus === 'queued'
+                ? 'Đáp án đang chờ gửi'
+                : saveStatus === 'error'
+                  ? 'Câu này chưa lưu thành công'
+                  : selected.length
+                    ? 'Đáp án đã được lưu'
+                    : 'Chưa chọn đáp án'}
           </p>
         </div>
         <div className="flex justify-between gap-3">

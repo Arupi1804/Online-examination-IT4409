@@ -8,6 +8,7 @@ import {
   oid,
   qid,
   profile,
+  buildResult,
 } from '../fixtures/exam-fixture';
 import type {
   AttemptPaper,
@@ -28,6 +29,15 @@ let signedIn: boolean;
 let offset: number;
 let saveGate: Promise<void> | null;
 let releaseSave: (() => void) | null;
+let rejoinCalls: unknown[];
+let heartbeatCalls: unknown[];
+let violations: { attemptId: string; type: string; clientAt: string }[];
+let recoverPaused: boolean;
+let recoverCallbacks: (() => void)[];
+let detailsPublished: boolean;
+let resultOverride: unknown;
+let resultHttpError: number;
+let resultRequests: number;
 
 function clock(status = 'RUNNING') {
   return {
@@ -43,15 +53,62 @@ test.beforeAll(async () => {
   io = new Server(http, {
     cors: { origin: 'http://localhost:5174', credentials: true },
   });
-  io.on('connection', (socket) =>
+  io.on('connection', (socket) => {
     socket.on('room:join', (payload, ack) => {
       expect(payload).toEqual({ examId });
       ack({
         ok: true,
         data: { ...clock(), roomCode: 'K7M2QX', participantCount: 1 },
       });
-    }),
-  );
+    });
+    socket.on('attempt:rejoin', (payload, ack) => {
+      expect(payload).toEqual({ attemptId });
+      rejoinCalls.push(payload);
+      const respond = () => {
+        if (!socket.connected) return;
+        const state = {
+          attemptId,
+          examId,
+          status: paper.status,
+          submittedAt:
+            paper.status === 'IN_PROGRESS'
+              ? null
+              : new Date(Date.now() + offset).toISOString(),
+          answers: [...answers.values()].map((answer) => ({
+            questionId: answer.questionId,
+            optionIds: answer.selectedOptionIds,
+          })),
+          clock: clock(),
+        };
+        socket.emit('attempt:state', state);
+        ack({ ok: true, data: state });
+      };
+      if (recoverPaused) recoverCallbacks.push(respond);
+      else respond();
+    });
+    socket.on('proctor:heartbeat', (payload, ack) => {
+      expect(payload).toEqual({ attemptId });
+      heartbeatCalls.push(payload);
+      ack({
+        ok: true,
+        data: { serverTime: new Date(Date.now() + offset).toISOString() },
+      });
+    });
+    socket.on('proctor:violation', (payload, ack) => {
+      expect(Object.keys(payload).sort()).toEqual([
+        'attemptId',
+        'clientAt',
+        'type',
+      ]);
+      expect(payload.attemptId).toBe(attemptId);
+      expect(['TAB_BLUR', 'FULLSCREEN_EXIT']).toContain(payload.type);
+      violations.push(payload);
+      ack({
+        ok: true,
+        data: { at: new Date(Date.now() + offset).toISOString() },
+      });
+    });
+  });
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject);
     http.listen(5190, 'localhost', resolve);
@@ -78,6 +135,15 @@ test.beforeEach(async ({ page }) => {
   signedIn = true;
   saveGate = null;
   releaseSave = null;
+  rejoinCalls = [];
+  heartbeatCalls = [];
+  violations = [];
+  recoverPaused = false;
+  recoverCallbacks = [];
+  detailsPublished = false;
+  resultOverride = null;
+  resultHttpError = 0;
+  resultRequests = 0;
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/v1/auth/me') {
@@ -109,6 +175,41 @@ test.beforeEach(async ({ page }) => {
           },
         },
       });
+    } else if (path === `/api/v1/attempts/${attemptId}/result`) {
+      resultRequests += 1;
+      if (resultHttpError) {
+        await route.fulfill({
+          status: resultHttpError,
+          json: {
+            error: {
+              code:
+                resultHttpError === 403 ? 'FORBIDDEN' : 'SERVICE_UNAVAILABLE',
+              message: 'Fixture',
+            },
+          },
+        });
+      } else if (paper.status === 'IN_PROGRESS') {
+        await route.fulfill({
+          status: 409,
+          json: {
+            error: { code: 'ATTEMPT_NOT_SUBMITTED', message: 'Not submitted' },
+          },
+        });
+      } else
+        await route.fulfill({
+          json: {
+            data:
+              resultOverride ??
+              buildResult(
+                {
+                  ...paper,
+                  serverTime: new Date(Date.now() + offset).toISOString(),
+                },
+                answers,
+                detailsPublished,
+              ),
+          },
+        });
     } else if (path.includes('/answers/')) {
       const questionId = path.split('/').at(-1)!;
       const body = route.request().postDataJSON();
@@ -152,7 +253,7 @@ test.beforeEach(async ({ page }) => {
             examId,
             status: 'SUBMITTED',
             submittedAt: new Date(Date.now() + offset).toISOString(),
-            score: 2,
+            score: buildResult(paper, answers).score,
             maxScore: 3,
             user: profile,
             answeredCount: answers.size,
@@ -279,7 +380,7 @@ test('submission waits for pending saves, confirms unanswered questions and send
   ).toBeDisabled();
   releaseSave!();
   await expect(
-    page.getByRole('heading', { name: 'Đã nộp bài', exact: true }),
+    page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
   ).toBeVisible();
   expect(submits).toBe(1);
   await expect(page.getByRole('radio')).toHaveCount(0);
@@ -344,8 +445,9 @@ test('expiry locks answers without client submission, extension resyncs and only
     submittedAt: new Date().toISOString(),
   });
   await expect(
-    page.getByRole('heading', { name: 'Đã nộp bài', exact: true }),
+    page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
   ).toHaveCount(0);
+  paper.status = 'AUTO_SUBMITTED';
   io.emit('attempt:submitted', {
     examId,
     attemptId,
@@ -353,7 +455,7 @@ test('expiry locks answers without client submission, extension resyncs and only
     submittedAt: new Date().toISOString(),
   });
   await expect(
-    page.getByRole('heading', { name: 'Đã nộp bài', exact: true }),
+    page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
   ).toBeVisible();
   expect(submits).toBe(0);
 });
@@ -443,4 +545,317 @@ test('mobile questions and submission dialog fit and open errors offer a clear r
   expect(box!.x + box!.width).toBeLessThanOrEqual(375);
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
+});
+
+test('offline choices stay queued and resume only after a fresh rejoin without creating another attempt', async ({
+  page,
+  context,
+}, testInfo) => {
+  await openExam(page);
+  await expect.poll(() => heartbeatCalls.length).toBeGreaterThan(0);
+  expect(
+    heartbeatCalls.every(
+      (payload) => JSON.stringify(payload) === JSON.stringify({ attemptId }),
+    ),
+  ).toBe(true);
+  const initialStarts = starts;
+  const initialRejoins = rejoinCalls.length;
+  const timer = await page.getByTestId('exam-timer').innerText();
+  await context.setOffline(true);
+  await expect(page.getByTestId('network-status')).toContainText('mất kết nối');
+  await page.getByRole('radio', { name: 'POST', exact: true }).check();
+  await expect(page.getByTestId('save-status')).toContainText('đang chờ gửi');
+  await expect(
+    page.getByRole('button', { name: 'Nộp bài', exact: true }),
+  ).toBeDisabled();
+  expect(saveCalls).toHaveLength(0);
+  await page.screenshot({
+    path: testInfo.outputPath('exam-offline.png'),
+    fullPage: true,
+  });
+  await expect(page.getByTestId('exam-timer')).not.toHaveText(timer);
+  await context.setOffline(false);
+  await saved(page);
+  expect(starts).toBe(initialStarts);
+  expect(rejoinCalls.length).toBeGreaterThan(initialRejoins);
+  expect(answers.get(qid(1))?.selectedOptionIds).toEqual([oid(12)]);
+  expect(violations.some((event) => event.type === 'DISCONNECT')).toBe(false);
+});
+
+test('pending answers survive a page reload and are reconciled before replay', async ({
+  page,
+  context,
+}) => {
+  await openExam(page);
+  await context.setOffline(true);
+  await page.getByRole('radio', { name: 'DELETE', exact: true }).check();
+  await expect(page.getByTestId('save-status')).toContainText('đang chờ gửi');
+  recoverPaused = true;
+  await context.setOffline(false);
+  await page.reload();
+  await expect(
+    page.getByRole('radio', { name: 'DELETE', exact: true }),
+  ).toBeChecked();
+  expect(answers.size).toBe(0);
+  expect(saveCalls.length).toBe(0);
+  await expect.poll(() => recoverCallbacks.length).toBeGreaterThan(0);
+  recoverPaused = false;
+  for (const respond of recoverCallbacks.splice(0)) respond();
+  await saved(page);
+  expect(answers.get(qid(1))?.selectedOptionIds).toEqual([oid(13)]);
+  expect(saveCalls).toHaveLength(1);
+});
+
+test('a server-closed attempt never replays offline answers and opens the confirmed result', async ({
+  page,
+  context,
+}) => {
+  await openExam(page);
+  await context.setOffline(true);
+  await page.getByRole('radio', { name: 'GET', exact: true }).check();
+  await expect(page.getByTestId('save-status')).toContainText('đang chờ gửi');
+  paper.status = 'FORCE_SUBMITTED';
+  await context.setOffline(false);
+  await expect(
+    page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Giáo viên chốt bài', { exact: true }),
+  ).toBeVisible();
+  expect(saveCalls).toHaveLength(0);
+  expect(submits).toBe(0);
+  expect(
+    await page.evaluate(
+      () =>
+        Object.keys(sessionStorage).filter((key) =>
+          key.startsWith('oe:student:pending:'),
+        ).length,
+    ),
+  ).toBe(0);
+});
+
+test('proctoring sends heartbeat, deduplicates hidden transitions and records actual fullscreen exits', async ({
+  page,
+}) => {
+  await openExam(page);
+  await page.evaluate(() => {
+    const change = (value: DocumentVisibilityState) => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => value,
+      });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    window.dispatchEvent(new Event('blur'));
+    change('hidden');
+    change('hidden');
+    change('visible');
+    change('hidden');
+    change('visible');
+  });
+  await expect
+    .poll(() => violations.filter((event) => event.type === 'TAB_BLUR').length)
+    .toBe(2);
+  await page
+    .getByRole('button', { name: 'Vào toàn màn hình', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Đang toàn màn hình', exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => document.exitFullscreen());
+  await expect
+    .poll(
+      () =>
+        violations.filter((event) => event.type === 'FULLSCREEN_EXIT').length,
+    )
+    .toBe(1);
+  expect(violations).toHaveLength(3);
+  await expect(
+    page.getByText(/3 sự kiện, 3 đã được máy chủ xác nhận/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('radio', { name: 'GET', exact: true }),
+  ).toBeEnabled();
+  expect(submits).toBe(0);
+});
+
+test('unsupported fullscreen is explained and expired exams stop reporting browser events', async ({
+  page,
+}) => {
+  paper = buildPaper(2, offset);
+  await openExam(page);
+  await page.evaluate(() =>
+    Object.defineProperty(document, 'fullscreenEnabled', {
+      configurable: true,
+      get: () => false,
+    }),
+  );
+  await page
+    .getByRole('button', { name: 'Vào toàn màn hình', exact: true })
+    .click();
+  await expect(
+    page.getByText('Trình duyệt hoặc thiết bị chưa hỗ trợ toàn màn hình.', {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('radio', { name: 'GET', exact: true }),
+  ).toBeDisabled({ timeout: 5000 });
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(violations).toHaveLength(0);
+  expect(submits).toBe(0);
+});
+
+test('result shows server grades immediately, conceals unpublished answers and refreshes when released', async ({
+  page,
+}, testInfo) => {
+  await openExam(page);
+  await page.getByRole('radio', { name: 'GET', exact: true }).check();
+  await saved(page);
+  await page.getByRole('button', { name: 'Nộp bài', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Xác nhận nộp bài', exact: true })
+    .click();
+  await expect(page).toHaveURL(
+    `/exam/${examId}/results?attemptId=${attemptId}`,
+  );
+  await expect(page.getByTestId('result-score')).toHaveText('1/ 3');
+  await expect(
+    page.getByRole('heading', {
+      name: 'Chi tiết đáp án chưa được công bố',
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText('Đáp án đúng', { exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.screenshot({
+    path: testInfo.outputPath('result-desktop.png'),
+    fullPage: true,
+  });
+  const before = resultRequests;
+  detailsPublished = true;
+  await page
+    .getByRole('button', { name: 'Tải lại kết quả', exact: true })
+    .click();
+  await expect(
+    page.getByRole('heading', { name: 'Xem lại từng câu', exact: true }),
+  ).toBeVisible();
+  expect(resultRequests).toBeGreaterThan(before);
+  expect(starts).toBe(1);
+  expect(submits).toBe(1);
+});
+
+test('published details display server partial credit and explanations with no new attempt or editable answers', async ({
+  page,
+}, testInfo) => {
+  paper.status = 'SUBMITTED';
+  const result = buildResult(
+    paper,
+    new Map([
+      [qid(1), { selectedOptionIds: [oid(11)] }],
+      [qid(2), { selectedOptionIds: [oid(22)] }],
+    ]),
+    true,
+  );
+  result.score = 0.75;
+  result.questions![0]!.earnedPoints = 0.25;
+  resultOverride = result;
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(`/exam/${examId}/results?attemptId=${attemptId}`);
+  await expect(page.getByTestId('result-score')).toContainText('0,75');
+  await page.getByText('Câu 2', { exact: true }).click();
+  await expect(
+    page.getByText('Lời giải từ server cho câu 2.', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Được một phần điểm · 0,5 / 1 điểm', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('radio')).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  expect(starts).toBe(0);
+  expect(saveCalls).toHaveLength(0);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath('result-mobile.png'),
+    fullPage: true,
+  });
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload();
+  await expect(page.getByTestId('result-score')).toContainText('0,75');
+  expect(starts).toBe(0);
+});
+
+test('result errors never become zero scores or cause an attempt to be created', async ({
+  page,
+}) => {
+  await page.goto(`/exam/${examId}/results`);
+  await expect(page.getByRole('alert')).toContainText(
+    'Chưa xác định được bài làm',
+  );
+  expect(resultRequests).toBe(0);
+  expect(starts).toBe(0);
+  await page.goto(`/exam/${examId}/results?attemptId=${attemptId}`);
+  await expect(page.getByRole('alert')).toContainText(
+    'chưa được máy chủ xác nhận đã nộp',
+  );
+  await expect(
+    page.getByRole('link', { name: 'Tiếp tục làm bài', exact: true }),
+  ).toBeVisible();
+  paper.status = 'SUBMITTED';
+  resultOverride = { ...buildResult(paper, answers), score: undefined };
+  await page.getByRole('button', { name: 'Thử lại', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByTestId('result-score')).toHaveCount(0);
+  resultOverride = {
+    ...buildResult(paper, answers),
+    examId: 'c9ec68a2-0000-4000-8000-000000000099',
+  };
+  await page.getByRole('button', { name: 'Thử lại', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('không khớp');
+  resultHttpError = 403;
+  await page.getByRole('button', { name: 'Thử lại', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('không có quyền');
+  expect(starts).toBe(0);
+  await expect(page.getByTestId('result-score')).toHaveCount(0);
+});
+
+test('reload after server closure opens the known result even when starting the attempt is rejected', async ({
+  page,
+  context,
+}) => {
+  await openExam(page);
+  await context.setOffline(true);
+  await page.getByRole('radio', { name: 'GET', exact: true }).check();
+  recoverPaused = true;
+  paper.status = 'AUTO_SUBMITTED';
+  startError = 'EXAM_ENDED';
+  await context.setOffline(false);
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Máy chủ tự chốt bài', { exact: true }),
+  ).toBeVisible();
+  expect(saveCalls).toHaveLength(0);
+  expect(submits).toBe(0);
+  expect(
+    await page.evaluate(
+      () =>
+        Object.keys(sessionStorage).filter((key) =>
+          key.startsWith('oe:student:pending:'),
+        ).length,
+    ),
+  ).toBe(0);
 });

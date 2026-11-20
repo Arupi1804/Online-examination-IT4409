@@ -6,7 +6,10 @@ import {
   type ExamService,
   type PaperQuestion,
   type Submission,
+  sameSelection,
+  isoTime,
 } from './exam-model.ts';
+import type { AttemptResult } from '../results/result-model.ts';
 
 function sampleQuestions(): PaperQuestion[] {
   const content = [
@@ -70,18 +73,54 @@ function sampleQuestions(): PaperQuestion[] {
 
 // This is a development-only backend simulation. Production never selects it.
 export function createMockExamService(): ExamService {
-  const records = new Map<string, { userId: string; paper: AttemptPaper }>();
+  type Record = {
+    userId: string;
+    paper: AttemptPaper;
+    submittedAt: string | null;
+  };
+  const records = new Map<string, Record>();
   const keyFor = (userId: string, examId: string) =>
     `oe:dev:attempt:${userId}:${examId}`;
-  function persist(record: { userId: string; paper: AttemptPaper }) {
+  function persist(record: Record) {
     try {
       sessionStorage.setItem(
         keyFor(record.userId, record.paper.examId),
-        JSON.stringify(record.paper),
+        JSON.stringify({ ...record.paper, devSubmittedAt: record.submittedAt }),
       );
     } catch {
       /* Memory still works. */
     }
+  }
+  function load(userId: string, examId: string): Record | undefined {
+    const key = keyFor(userId, examId);
+    let record = records.get(key);
+    if (record) return record;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (raw) {
+        const value: unknown = JSON.parse(raw);
+        const paper = attemptPaperSchema.parse(value);
+        if (paper.examId === examId) {
+          const at =
+            value && typeof value === 'object' && 'devSubmittedAt' in value
+              ? isoTime.safeParse(value.devSubmittedAt)
+              : null;
+          record = {
+            userId,
+            paper,
+            submittedAt: at?.success
+              ? at.data
+              : paper.status !== 'IN_PROGRESS'
+                ? paper.serverTime
+                : null,
+          };
+          records.set(key, record);
+        }
+      }
+    } catch {
+      /* No valid development record. */
+    }
+    return record;
   }
   async function wait() {
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -107,20 +146,12 @@ export function createMockExamService(): ExamService {
       if (examId.endsWith('000001'))
         throw new ApiError(422, 'Not started', 'EXAM_NOT_STARTED');
       const key = keyFor(userId, examId);
-      let record = records.get(key);
+      let record = load(userId, examId);
       if (!record) {
-        try {
-          const raw = sessionStorage.getItem(key);
-          if (raw) {
-            const paper = attemptPaperSchema.parse(JSON.parse(raw));
-            if (paper.examId === examId) record = { userId, paper };
-          }
-        } catch {
-          /* Start a new simulated paper if the development cache is corrupt. */
-        }
         if (!record)
           record = {
             userId,
+            submittedAt: null,
             paper: {
               attemptId: crypto.randomUUID(),
               examId,
@@ -182,17 +213,60 @@ export function createMockExamService(): ExamService {
       if (Date.now() > Date.parse(record.paper.endTime) + 5000)
         throw new ApiError(422, 'Late', 'SUBMIT_TOO_LATE');
       record.paper.status = 'SUBMITTED';
+      record.submittedAt = new Date().toISOString();
       persist(record);
       return {
         examId: record.paper.examId,
         attemptId,
         status: 'SUBMITTED',
-        submittedAt: new Date().toISOString(),
+        submittedAt: record.submittedAt,
       };
     },
     watch(paper, callbacks) {
       const record = find(paper.attemptId);
-      callbacks.onConnection(true);
+      let active = true;
+      function recover() {
+        if (!active || !navigator.onLine) {
+          if (active) callbacks.onConnection(false);
+          return;
+        }
+        if (record.paper.status !== 'IN_PROGRESS') {
+          callbacks.onSubmitted({
+            attemptId: paper.attemptId,
+            examId: paper.examId,
+            status: record.paper.status,
+            submittedAt: record.submittedAt ?? record.paper.serverTime,
+          });
+          return;
+        }
+        callbacks.onClock({
+          examId: paper.examId,
+          status: 'RUNNING',
+          endTime: record.paper.endTime,
+          serverTime: new Date().toISOString(),
+          receivedAt: performance.now(),
+          roundTripMs: 0,
+        });
+        callbacks.onRecovered({
+          examId: paper.examId,
+          attemptId: paper.attemptId,
+          status: record.paper.status,
+          submittedAt: record.submittedAt,
+          answers: record.paper.answers.map((answer) => ({
+            questionId: answer.questionId,
+            optionIds: answer.selectedOptionIds,
+          })),
+          clock: {
+            examId: paper.examId,
+            status: 'RUNNING',
+            startTime: record.paper.startedAt,
+            endTime: record.paper.endTime,
+            serverTime: new Date().toISOString(),
+          },
+        });
+        callbacks.onConnection(true);
+      }
+      queueMicrotask(recover);
       const timer = setInterval(() => {
         if (!navigator.onLine) {
           callbacks.onConnection(false);
@@ -204,12 +278,13 @@ export function createMockExamService(): ExamService {
           record.paper.status === 'IN_PROGRESS'
         ) {
           record.paper.status = 'AUTO_SUBMITTED';
+          record.submittedAt = new Date().toISOString();
           persist(record);
           const submission: Submission = {
             examId: paper.examId,
             attemptId: paper.attemptId,
             status: 'AUTO_SUBMITTED',
-            submittedAt: new Date().toISOString(),
+            submittedAt: record.submittedAt,
           };
           callbacks.onSubmitted(submission);
         } else
@@ -222,7 +297,73 @@ export function createMockExamService(): ExamService {
             roundTripMs: 0,
           });
       }, 1000);
-      return () => clearInterval(timer);
+      return {
+        disconnect() {
+          active = false;
+          clearInterval(timer);
+        },
+        async report(_type, _clientAt) {
+          await wait();
+          if (
+            !active ||
+            record.paper.status !== 'IN_PROGRESS' ||
+            Date.now() >= Date.parse(record.paper.endTime)
+          )
+            throw new ApiError(409, 'Closed', 'INVALID_STATE');
+        },
+      };
+    },
+    async result(userId, examId, attemptId): Promise<AttemptResult> {
+      await wait();
+      const record = load(userId, examId);
+      if (!record || record.paper.attemptId !== attemptId)
+        throw new ApiError(404, 'Not found', 'NOT_FOUND');
+      if (record.paper.status === 'IN_PROGRESS') {
+        if (Date.now() <= Date.parse(record.paper.endTime) + 5000)
+          throw new ApiError(409, 'Not submitted', 'ATTEMPT_NOT_SUBMITTED');
+        record.paper.status = 'AUTO_SUBMITTED';
+        record.submittedAt = new Date().toISOString();
+        persist(record);
+      }
+      // Answer keys exist exclusively in this development-only backend mock.
+      const questions = record.paper.questions.map((question, index) => {
+        const correctIndexes =
+          index === 1 ? [0, 1] : index === 4 ? [0, 1, 3] : [0];
+        const selectedOptionIds =
+          record.paper.answers.find(
+            (answer) => answer.questionId === question.questionId,
+          )?.selectedOptionIds ?? [];
+        const correctIds = correctIndexes.map(
+          (optionIndex) => question.options[optionIndex]!.id,
+        );
+        return {
+          ...question,
+          explanation: 'Lời giải mô phỏng cho bài thi mẫu.',
+          selectedOptionIds,
+          earnedPoints: sameSelection(selectedOptionIds, correctIds)
+            ? question.points
+            : 0,
+          options: question.options.map((option, optionIndex) => ({
+            ...option,
+            isCorrect: correctIndexes.includes(optionIndex),
+          })),
+        };
+      });
+      return {
+        attemptId,
+        examId,
+        examTitle: 'Kiểm tra kiến thức Công nghệ Web',
+        status: record.paper.status,
+        startedAt: record.paper.startedAt,
+        submittedAt: record.submittedAt ?? record.paper.serverTime,
+        score: questions.reduce(
+          (sum, question) => sum + question.earnedPoints,
+          0,
+        ),
+        maxScore: questions.reduce((sum, question) => sum + question.points, 0),
+        questions:
+          Date.now() >= Date.parse(record.paper.endTime) ? questions : null,
+      };
     },
   };
 }

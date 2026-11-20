@@ -11,6 +11,7 @@ import {
   type LoadedAttempt,
 } from './exam-model.ts';
 import { ExamError } from './exam-errors.ts';
+import { attemptResultSchema } from '../results/result-model.ts';
 
 export function createApiExamService(): ExamService {
   const starting = new Map<string, Promise<LoadedAttempt>>();
@@ -74,18 +75,30 @@ export function createApiExamService(): ExamService {
     },
     async submit(attemptId) {
       z.string().uuid().parse(attemptId);
-      const { data } = z
-        .object({ data: submissionSchema })
-        .parse(
-          await apiFetch<unknown>(`/api/v1/attempts/${attemptId}/submit`, {
-            method: 'POST',
-            signal: AbortSignal.timeout(12000),
-          }),
-        );
+      const { data } = z.object({ data: submissionSchema }).parse(
+        await apiFetch<unknown>(`/api/v1/attempts/${attemptId}/submit`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(12000),
+        }),
+      );
       if (data.attemptId !== attemptId)
         throw new ExamError('RESPONSE_MISMATCH');
       return data;
     },
     watch: connectAttempt,
+    async result(_userId, examId, attemptId) {
+      z.string().uuid().parse(examId);
+      z.string().uuid().parse(attemptId);
+      const { data } = z
+        .object({ data: attemptResultSchema })
+        .parse(
+          await apiFetch<unknown>(`/api/v1/attempts/${attemptId}/result`, {
+            signal: AbortSignal.timeout(12000),
+          }),
+        );
+      if (data.attemptId !== attemptId || data.examId !== examId)
+        throw new ExamError('RESPONSE_MISMATCH');
+      return data;
+    },
   };
 }

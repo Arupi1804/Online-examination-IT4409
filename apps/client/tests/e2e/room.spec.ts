@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
-import { buildPaper } from '../fixtures/exam-fixture';
+import { buildPaper, attemptId } from '../fixtures/exam-fixture';
 
 // A protocol fixture owned by the frontend tests, not the project's backend.
 const examId = 'c9ec68a2-0000-4000-8000-000000000001';
@@ -39,6 +39,27 @@ test.beforeAll(async () => {
     cors: { origin: 'http://localhost:5174', credentials: true },
   });
   io.on('connection', (socket) => {
+    socket.on('attempt:rejoin', (payload, ack) => {
+      expect(payload).toEqual({ attemptId });
+      ack({
+        ok: true,
+        data: {
+          attemptId,
+          examId,
+          status: 'IN_PROGRESS',
+          submittedAt: null,
+          answers: [],
+          clock: clock(),
+        },
+      });
+    });
+    socket.on('proctor:heartbeat', (payload, ack) => {
+      expect(payload).toEqual({ attemptId });
+      ack({ ok: true, data: { serverTime: new Date().toISOString() } });
+    });
+    socket.on('proctor:violation', (_payload, ack) =>
+      ack({ ok: true, data: { at: new Date().toISOString() } }),
+    );
     socket.on(
       'room:join',
       (payload: unknown, ack: (value: unknown) => void) => {

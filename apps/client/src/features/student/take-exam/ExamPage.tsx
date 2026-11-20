@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Link,
+  Navigate,
   useBlocker,
   useOutletContext,
   useParams,
 } from 'react-router-dom';
 import {
   Check,
-  CircleCheck,
+  CircleAlert,
   Clock3,
   CloudCheck,
   Flag,
@@ -20,10 +21,21 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/useAuth';
 import { examService, isExamMock } from './exam-service';
-import { getExamErrorMessage, isExamAuthError } from './exam-errors';
+import {
+  getExamErrorMessage,
+  isExamAuthError,
+  hasExamErrorCode,
+} from './exam-errors';
 import { formatRemaining, type LoadedAttempt } from './exam-model';
-import { readExamUI, saveExamUI } from './exam-storage';
-import { useCountdown, useExamSession, type Receipt } from './useExamSession';
+import {
+  readExamUI,
+  saveExamUI,
+  saveAttemptReference,
+  readAttemptReference,
+} from './exam-storage';
+import { useCountdown, useExamSession } from './useExamSession';
+import { useProctoring } from './useProctoring';
+import { ProctorPanel } from './ProctorPanel';
 import { QuestionCard } from './QuestionCard';
 import { SubmitExamDialog } from './SubmitExamDialog';
 import { UnsavedAnswersDialog } from './UnsavedAnswersDialog';
@@ -35,23 +47,49 @@ export default function ExamPage() {
   const [loaded, setLoaded] = useState<LoadedAttempt | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [attempt, setAttempt] = useState(0);
+  const [resultAttempt, setResultAttempt] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     setLoaded(null);
     setError(null);
+    setResultAttempt(null);
     examService
       .start(user!.id, examId)
       .then((result) => {
-        if (active) setLoaded(result);
+        if (active) {
+          saveAttemptReference(user!.id, examId, result.paper.attemptId);
+          setLoaded(result);
+        }
       })
       .catch((caught: unknown) => {
-        if (active) setError(caught);
+        if (active) {
+          const known = readAttemptReference(user!.id, examId);
+          if (
+            known &&
+            [
+              'ATTEMPT_ALREADY_SUBMITTED',
+              'ATTEMPT_LIMIT_REACHED',
+              'EXAM_ENDED',
+            ].some((code) => hasExamErrorCode(caught, code))
+          ) {
+            setResultAttempt(known);
+            return;
+          }
+          setError(caught);
+        }
       });
     return () => {
       active = false;
     };
   }, [user, examId, attempt]);
 
+  if (resultAttempt)
+    return (
+      <Navigate
+        to={`/exam/${examId}/results?attemptId=${resultAttempt}`}
+        replace
+      />
+    );
   if (error !== null)
     return (
       <Card className="mx-auto my-10 max-w-lg gap-5 border p-6 sm:p-8">
@@ -108,7 +146,7 @@ function ExamWorkspace({
   userId: string;
 }) {
   const { paper } = loaded;
-  const session = useExamSession(loaded);
+  const session = useExamSession(loaded, userId);
   const { retrySession } = useAuth();
   const remaining = useCountdown(session.clock);
   const [ui, setUI] = useState(() => readExamUI(userId, paper));
@@ -128,6 +166,15 @@ function ExamWorkspace({
   ).length;
   const expired = remaining === 0 || session.closed;
   const disabled = expired || session.fatalError !== null || session.submitting;
+  const proctor = useProctoring(
+    !expired &&
+      !session.receipt &&
+      session.fatalError === null &&
+      !session.submitting,
+    session.report,
+  );
+  const submitDisabled =
+    disabled || !session.connected || !session.browserOnline;
   const { beforeLogout } = useOutletContext<StudentOutletContext>();
   const { retrySaving, flush } = session;
   const dirty = session.pendingCount > 0 || session.failedCount > 0;
@@ -141,8 +188,7 @@ function ExamWorkspace({
   useEffect(() => {
     if (
       blocker.state === 'blocked' &&
-      (!dirty || session.receipt) &&
-      !session.submitting
+      (session.receipt || (!dirty && !session.submitting))
     )
       blocker.proceed();
   }, [blocker, dirty, session.receipt, session.submitting]);
@@ -173,7 +219,13 @@ function ExamWorkspace({
     heading.current?.scrollIntoView({ block: 'start' });
   }
 
-  if (session.receipt) return <SubmissionReceipt receipt={session.receipt} />;
+  if (session.receipt)
+    return (
+      <Navigate
+        to={`/exam/${paper.examId}/results?attemptId=${paper.attemptId}`}
+        replace
+      />
+    );
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 pb-8">
@@ -211,6 +263,39 @@ function ExamWorkspace({
           Bài thi mô phỏng · Đáp án và thời gian được lưu riêng trên trình duyệt
           để thử giao diện.
         </p>
+      )}
+      {(!session.browserOnline || !session.connected) && !session.receipt && (
+        <section
+          data-testid="network-status"
+          role={session.browserOnline ? 'status' : 'alert'}
+          className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-900"
+        >
+          <h2 className="font-semibold">
+            {session.browserOnline
+              ? 'Đang xác nhận kết nối với phòng thi'
+              : 'Bạn đang mất kết nối'}
+          </h2>
+          <p>
+            Đồng hồ vẫn chạy. Bạn có thể tiếp tục chọn đáp án nếu còn thời gian;
+            hệ thống sẽ xác nhận trạng thái bài làm trước khi gửi tiếp các đáp
+            án chưa lưu.
+          </p>
+          {dirty && (
+            <p>
+              {session.draftStored
+                ? 'Các đáp án chưa gửi đã được giữ trong phiên trình duyệt này để khôi phục khi tải lại.'
+                : 'Trình duyệt chưa lưu được bản khôi phục. Hãy giữ trang này mở để tránh mất đáp án chưa gửi.'}
+            </p>
+          )}
+          <Button
+            variant="outline"
+            className="mt-3"
+            onClick={session.reconnect}
+            disabled={!session.browserOnline || session.fatalError !== null}
+          >
+            Thử kết nối lại
+          </Button>
+        </section>
       )}
       {expired && (
         <div
@@ -257,7 +342,9 @@ function ExamWorkspace({
             aria-live="polite"
             data-testid="save-status"
           >
-            {session.pendingCount ? (
+            {session.failedCount ? (
+              <CircleAlert className="size-4" aria-hidden="true" />
+            ) : session.pendingCount ? (
               <LoaderCircle
                 className="size-4 animate-spin motion-reduce:animate-none"
                 aria-hidden="true"
@@ -267,9 +354,11 @@ function ExamWorkspace({
             )}
             {session.failedCount
               ? `${session.failedCount} câu chưa lưu thành công`
-              : session.pendingCount
-                ? `Đang lưu ${session.pendingCount} câu...`
-                : 'Mọi thay đổi đã được lưu'}
+              : session.queuedCount
+                ? `${session.queuedCount} câu đang chờ gửi`
+                : session.pendingCount
+                  ? `Đang lưu ${session.pendingCount} câu...`
+                  : 'Mọi thay đổi đã được lưu'}
           </p>
         </div>
         <div
@@ -372,7 +461,7 @@ function ExamWorkspace({
               <Button
                 className="w-full"
                 onClick={() => setConfirming(true)}
-                disabled={disabled}
+                disabled={submitDisabled}
               >
                 <Send aria-hidden="true" />
                 Nộp bài
@@ -410,6 +499,7 @@ function ExamWorkspace({
               </>
             )}
           </div>
+          <ProctorPanel proctor={proctor} disabled={disabled} />
         </aside>
       </div>
       {confirming && (
@@ -419,7 +509,12 @@ function ExamWorkspace({
           flagged={ui.flaggedQuestionIds.length}
           failed={session.failedCount}
           submitting={session.submitting}
-          disabled={expired || session.fatalError !== null}
+          disabled={
+            expired ||
+            session.fatalError !== null ||
+            !session.connected ||
+            !session.browserOnline
+          }
           error={session.submitError}
           onClose={() => setConfirming(false)}
           onConfirm={() => {
@@ -430,38 +525,16 @@ function ExamWorkspace({
       )}
       {blocker.state === 'blocked' && (
         <UnsavedAnswersDialog
-          failed={session.failedCount > 0}
+          failed={session.failedCount > 0 || session.queuedCount > 0}
           submitting={session.submitting}
           onStay={() => blocker.reset()}
           onRetry={session.retrySaving}
-          onLeave={() => blocker.proceed()}
+          onLeave={() => {
+            session.discardPending();
+            blocker.proceed();
+          }}
         />
       )}
     </div>
-  );
-}
-
-function SubmissionReceipt({ receipt }: { receipt: Receipt }) {
-  return (
-    <Card className="mx-auto my-8 max-w-lg items-center gap-5 border p-6 text-center sm:my-14 sm:p-10">
-      <span className="flex size-16 items-center justify-center rounded-full bg-success/10 text-success">
-        <CircleCheck className="size-8" aria-hidden="true" />
-      </span>
-      <h1 className="text-2xl font-semibold">Đã nộp bài</h1>
-      <p className="text-base leading-7 text-muted-foreground">
-        Máy chủ đã xác nhận bài làm của bạn được nộp. Bạn có thể rời trang này.
-      </p>
-      {receipt.submittedAt && (
-        <p className="text-sm text-muted-foreground">
-          Thời điểm nộp: {new Date(receipt.submittedAt).toLocaleString('vi-VN')}
-        </p>
-      )}
-      <Link
-        to="/join"
-        className="rounded-lg bg-primary px-5 py-3 text-sm font-medium text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        Về trang nhập mã
-      </Link>
-    </Card>
   );
 }
