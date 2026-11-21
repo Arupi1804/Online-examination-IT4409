@@ -36,6 +36,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 
 - Vòng đời: `POST /exams` tạo DRAFT → `POST /exams/:id/publish` chuyển SCHEDULED (mở phòng chờ) → giáo viên gửi `exam:start` qua WebSocket chuyển RUNNING, server đặt `startTime = now`, `endTime = now + durationSec` → hết giờ hoặc giáo viên kết thúc chuyển ENDED.
 - Sửa/xóa chỉ khi DRAFT. Khi SCHEDULED, RUNNING hoặc ENDED, sửa cấu hình hoặc danh sách câu hỏi trả 409 `EXAM_NOT_EDITABLE`.
+- Sửa, xóa và publish kỳ thi khóa dòng `exams` bằng `SELECT … FOR UPDATE` rồi mới kiểm tra DRAFT, nên không thể sửa chen ngang lúc publish. Server sinh `roomCode` ngẫu nhiên theo `RoomCode` và thử lại khi trùng.
 - DRAFT có thể chưa có câu hỏi. Publish chỉ khi DRAFT và có ít nhất một câu hỏi; sai trạng thái trả 409 `EXAM_NOT_EDITABLE`, DRAFT chưa có câu hỏi trả 422 `VALIDATION_FAILED` và giữ nguyên trạng thái DRAFT. Sau khi publish, không được sửa cấu hình hoặc danh sách câu hỏi.
 - `endTime` là mốc chung của cả kỳ thi (thi đồng loạt): thí sinh vào muộn vẫn kết thúc cùng lúc.
 

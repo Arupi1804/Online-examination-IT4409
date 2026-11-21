@@ -371,8 +371,9 @@ paths:
       summary: Thí sinh tra cứu kỳ thi bằng mã phòng
       description: >-
         Role: STUDENT. Chỉ kỳ thi SCHEDULED hoặc RUNNING mới vào được; kỳ thi
-        DRAFT được coi như không tồn tại. Endpoint không tạo bài làm; sau đó
-        client vào phòng realtime bằng event `room:join`.
+        DRAFT được coi như không tồn tại. Mã phòng không phân biệt hoa thường
+        (server chuyển sang chữ hoa trước khi kiểm tra). Endpoint không tạo
+        bài làm; sau đó client vào phòng realtime bằng event `room:join`.
       requestBody:
         required: true
         content:
