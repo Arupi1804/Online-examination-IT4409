@@ -4,7 +4,8 @@ import { HttpError } from '../../../core/errors/http-error.js';
 import type { ListQuestionsQuery } from '../dto/question.dto.js';
 
 // `examQuestions` here only holds exams past DRAFT: non-empty means locked.
-const include = {
+// Exported with toQuestionDto so exam details render questions the same way.
+export const questionInclude = {
   options: { orderBy: { orderIndex: 'asc' } },
   examQuestions: {
     where: { exam: { status: { not: 'DRAFT' } } },
@@ -12,6 +13,7 @@ const include = {
     take: 1,
   },
 } satisfies Prisma.QuestionInclude;
+const include = questionInclude;
 type QuestionRow = Prisma.QuestionGetPayload<{ include: typeof include }>;
 
 const notFound = () =>
@@ -23,7 +25,7 @@ const inUse = () =>
     'Question is used in an exam',
   );
 
-function toDto(q: QuestionRow) {
+export function toQuestionDto(q: QuestionRow) {
   return {
     id: q.id,
     type: q.type,
@@ -72,7 +74,7 @@ export async function listQuestions(
     }),
     prisma.question.count({ where }),
   ]);
-  return { data: rows.map(toDto), meta: { page, pageSize, total } };
+  return { data: rows.map(toQuestionDto), meta: { page, pageSize, total } };
 }
 
 export async function getQuestion(
@@ -85,7 +87,7 @@ export async function getQuestion(
     include,
   });
   if (!row) throw notFound();
-  return toDto(row);
+  return toQuestionDto(row);
 }
 
 export async function createQuestion(
@@ -97,7 +99,7 @@ export async function createQuestion(
     data: { ownerId, ...fields(input), options: { create: optionRows(input) } },
     include,
   });
-  return toDto(row);
+  return toQuestionDto(row);
 }
 
 export async function updateQuestion(
@@ -128,7 +130,7 @@ export async function updateQuestion(
       data: { ...fields(input), options: { create: optionRows(input) } },
       include,
     });
-    return toDto(row);
+    return toQuestionDto(row);
   });
 }
 
