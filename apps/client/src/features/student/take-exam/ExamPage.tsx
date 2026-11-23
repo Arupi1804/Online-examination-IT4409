@@ -152,6 +152,7 @@ function ExamWorkspace({
   const [ui, setUI] = useState(() => readExamUI(userId, paper));
   const [confirming, setConfirming] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const navigation = useRef<HTMLElement>(null);
   const currentIndex = Math.max(
     0,
     paper.questions.findIndex(
@@ -386,6 +387,16 @@ function ExamWorkspace({
             </Button>
           </div>
         )}
+        <Button
+          variant="outline"
+          className="mt-4 h-auto min-h-11 w-full whitespace-normal py-2.5 lg:hidden"
+          onClick={() => {
+            navigation.current?.focus({ preventScroll: true });
+            navigation.current?.scrollIntoView({ block: 'start' });
+          }}
+        >
+          Đến danh sách câu hỏi
+        </Button>
       </section>
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -413,12 +424,14 @@ function ExamWorkspace({
           onNext={() => goTo(currentIndex + 1)}
         />
 
-        <aside className="space-y-4 lg:sticky lg:top-36">
+        <aside className="min-w-0 space-y-4 lg:sticky lg:top-36">
           <Card className="gap-5 border p-5">
             <h2 className="text-lg font-semibold">Danh sách câu hỏi</h2>
             <nav
+              ref={navigation}
+              tabIndex={-1}
               aria-label="Điều hướng câu hỏi"
-              className="grid max-h-72 grid-cols-5 gap-2 overflow-y-auto p-1 sm:grid-cols-8 lg:grid-cols-5"
+              className="grid max-h-72 scroll-mt-40 grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-2 overflow-y-auto rounded p-1 focus-visible:outline-2 focus-visible:outline-ring"
             >
               {paper.questions.map((item, index) => {
                 const hasAnswer = !!session.answers[item.questionId]?.length;
@@ -443,6 +456,16 @@ function ExamWorkspace({
                 );
               })}
             </nav>
+            <Button
+              variant="outline"
+              className="h-auto min-h-11 w-full whitespace-normal py-2.5 lg:hidden"
+              onClick={() => {
+                heading.current?.focus({ preventScroll: true });
+                heading.current?.scrollIntoView({ block: 'start' });
+              }}
+            >
+              Về câu đang làm
+            </Button>
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <Check className="size-4 text-primary" aria-hidden="true" />

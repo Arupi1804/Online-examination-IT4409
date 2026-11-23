@@ -159,3 +159,17 @@ chuyển tab/fullscreen, bảo vệ kết quả chưa công bố và dọn kết
 giả lập, chưa thay thế kiểm tra tích hợp backend thật. Cần để trống cổng
 5174 và 5190 khi chạy E2E.
 Để dùng Edge đã cài, đặt `$env:PLAYWRIGHT_CHANNEL = "msedge"` trước khi chạy.
+
+## Responsive và kiểm thử luồng thí sinh
+
+Giao diện hỗ trợ màn hình từ 320px, nội dung câu hỏi/đáp án dài và hộp thoại
+cuộn khi màn hình thấp. Danh sách câu hỏi có nút đi nhanh trên mobile/tablet;
+liên kết **Đến nội dung chính** xuất hiện khi dùng Tab. Chọn câu đưa focus
+về tiêu đề, hộp thoại dùng modal của trình duyệt và Escape để ở lại bài.
+
+Test case, dữ liệu, bước chạy và giới hạn tích hợp được mô tả tại
+[tests/README.md](tests/README.md). Suite `student-qa.spec.ts` kiểm tra luồng
+đăng nhập → phòng chờ → làm bài → kết quả → đăng xuất ở 320/375/768/1280px,
+bàn phím, chữ 200%, reduced motion và hộp thoại khi xoay ngang. Suite này dùng
+REST/Socket.IO fixtures. Suite E2E tại root có thêm đăng ký/đăng nhập,
+khôi phục cookie session và đăng xuất bằng PostgreSQL/Redis/backend thật.

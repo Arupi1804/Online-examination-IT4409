@@ -5,13 +5,18 @@ export default defineConfig({
   testIgnore: '**/workspace.spec.ts',
   // Realtime fixtures share a local port and are isolated by test file.
   workers: 1,
+  reporter: [['list'], ['html', { open: 'never' }]],
   projects: [
     {
       name: 'chromium',
       use: { browserName: 'chromium', channel: process.env.PLAYWRIGHT_CHANNEL },
     },
   ],
-  use: { baseURL: 'http://localhost:5174' },
+  use: {
+    baseURL: 'http://localhost:5174',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+  },
   webServer: {
     command:
       'pnpm --filter @online-exam/shared build && pnpm --filter @online-exam/client dev --port 5174',

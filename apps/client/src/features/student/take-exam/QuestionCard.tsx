@@ -42,7 +42,7 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
     ref,
   ) {
     return (
-      <Card className="gap-6 border p-5 sm:p-8">
+      <Card className="min-w-0 gap-6 border p-5 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="rounded-md bg-secondary px-2.5 py-1 font-medium text-primary">
@@ -54,6 +54,7 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
           </div>
           <Button
             variant={flagged ? 'secondary' : 'outline'}
+            className="h-auto min-h-11 max-w-full whitespace-normal py-2.5"
             onClick={onFlag}
             aria-pressed={flagged}
             disabled={disabled}
@@ -83,7 +84,7 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
               : 'Chọn một đáp án.'}
           </p>
         </div>
-        <fieldset disabled={disabled} className="space-y-3">
+        <fieldset disabled={disabled} className="min-w-0 space-y-3">
           <legend className="sr-only">Chọn đáp án cho câu {index + 1}</legend>
           {question.options.map((option, optionIndex) => {
             const checked = selected.includes(option.id);
@@ -124,6 +125,7 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <Button
             variant="ghost"
+            className="h-auto min-h-11 max-w-full whitespace-normal py-2.5"
             disabled={disabled || !selected.length}
             onClick={() => onChoose([])}
           >
@@ -150,12 +152,18 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
                     : 'Chưa chọn đáp án'}
           </p>
         </div>
-        <div className="flex justify-between gap-3">
-          <Button variant="outline" onClick={onPrevious} disabled={index === 0}>
+        <div className="flex flex-wrap justify-between gap-3">
+          <Button
+            variant="outline"
+            className="h-auto min-h-11 max-w-full whitespace-normal py-2.5"
+            onClick={onPrevious}
+            disabled={index === 0}
+          >
             Câu trước
           </Button>
           <Button
             variant="outline"
+            className="ml-auto h-auto min-h-11 max-w-full whitespace-normal py-2.5"
             onClick={onNext}
             disabled={index === total - 1}
           >

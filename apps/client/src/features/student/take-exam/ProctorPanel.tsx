@@ -23,7 +23,7 @@ export function ProctorPanel({
         thi hoặc thoát toàn màn hình sẽ được ghi nhận.
       </p>
       <Button
-        className="w-full"
+        className="h-auto min-h-11 w-full whitespace-normal py-2.5"
         variant="outline"
         onClick={() => {
           void proctor.enterFullscreen();
