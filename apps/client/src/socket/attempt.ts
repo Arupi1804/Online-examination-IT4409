@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { z } from 'zod';
+import { examSocketUrl } from './namespace.ts';
 import {
   examClockSchema,
   roomStateSchema,
@@ -36,9 +37,11 @@ const violationAck = z.discriminatedUnion('ok', [
 
 export function connectAttempt(paper: AttemptPaper, callbacks: ExamCallbacks) {
   const socket = io(
-    import.meta.env.VITE_REALTIME_URL ||
-      import.meta.env.VITE_API_URL ||
-      undefined,
+    examSocketUrl(
+      import.meta.env.VITE_REALTIME_URL ||
+        import.meta.env.VITE_API_URL ||
+        undefined,
+    ),
     {
       autoConnect: false,
       withCredentials: true,

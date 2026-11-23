@@ -11,5 +11,7 @@ coverage/
 apps/server/uploads/
 # Local document extraction and UI verification tools.
 /tmp/
+.cache/
+test-pnpm/
 test-results/
 playwright-report/

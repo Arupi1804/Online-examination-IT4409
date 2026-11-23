@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  testIgnore: '**/workspace.spec.ts',
   // Realtime fixtures share a local port and are isolated by test file.
   workers: 1,
   projects: [
@@ -12,7 +13,8 @@ export default defineConfig({
   ],
   use: { baseURL: 'http://localhost:5174' },
   webServer: {
-    command: 'pnpm dev --port 5174',
+    command:
+      'pnpm --filter @online-exam/shared build && pnpm --filter @online-exam/client dev --port 5174',
     env: {
       VITE_USE_MOCK: 'false',
       VITE_API_URL: '',

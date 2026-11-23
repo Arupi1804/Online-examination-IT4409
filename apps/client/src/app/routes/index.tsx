@@ -1,10 +1,10 @@
-import { Routes, Route, Navigate } from "react-router-dom";
-import StudentLayout from "@/components/layout/StudentLayout";
-import LoginPage from "@/features/auth/LoginPage";
-import JoinRoomPage from "@/features/student/room/JoinRoomPage";
-import WaitingRoomPage from "@/features/student/waiting-room/WaitingRoomPage";
-import ExamPage from "@/features/student/take-exam/ExamPage";
-import ResultsPage from "@/features/student/results/ResultsPage";
+import { Routes, Route, Navigate } from 'react-router-dom';
+import StudentLayout from '@/components/layout/StudentLayout';
+import LoginPage from '@/features/auth/LoginPage';
+import JoinRoomPage from '@/features/student/room/JoinRoomPage';
+import WaitingRoomPage from '@/features/student/waiting-room/WaitingRoomPage';
+import ExamPage from '@/features/student/take-exam/ExamPage';
+import ResultsPage from '@/features/student/results/ResultsPage';
 
 export default function AppRoutes() {
   return (
@@ -25,4 +25,3 @@ export default function AppRoutes() {
     </Routes>
   );
 }
-

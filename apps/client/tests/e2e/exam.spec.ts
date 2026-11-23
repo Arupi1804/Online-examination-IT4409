@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
+import { WS_NAMESPACE } from '@online-exam/shared';
 import {
   buildPaper,
   examId,
@@ -53,7 +54,8 @@ test.beforeAll(async () => {
   io = new Server(http, {
     cors: { origin: 'http://localhost:5174', credentials: true },
   });
-  io.on('connection', (socket) => {
+  io.of('/').use((_socket, next) => next(new Error('Use /exam namespace')));
+  io.of(WS_NAMESPACE).on('connection', (socket) => {
     socket.on('room:join', (payload, ack) => {
       expect(payload).toEqual({ examId });
       ack({
@@ -122,7 +124,7 @@ test.afterEach(() => {
 });
 
 test.beforeEach(async ({ page }) => {
-  io.disconnectSockets(true);
+  io.of(WS_NAMESPACE).disconnectSockets(true);
   offset = 3 * 3600000; // Deliberately different from the browser's wall clock.
   paper = buildPaper(1200, offset);
   answers = new Map();
@@ -430,15 +432,15 @@ test('expiry locks answers without client submission, extension resyncs and only
   );
   expect(submits).toBe(0);
   paper.endTime = new Date(Date.now() + offset + 600000).toISOString();
-  io.emit('exam:extended', clock());
+  io.of(WS_NAMESPACE).emit('exam:extended', clock());
   await expect(
     page.getByRole('radio', { name: 'GET', exact: true }),
   ).toBeEnabled();
-  io.emit('exam:ended', clock('ENDED'));
+  io.of(WS_NAMESPACE).emit('exam:ended', clock('ENDED'));
   await expect(
     page.getByRole('radio', { name: 'GET', exact: true }),
   ).toBeDisabled();
-  io.emit('attempt:submitted', {
+  io.of(WS_NAMESPACE).emit('attempt:submitted', {
     examId,
     attemptId: 'd1000000-0000-4000-8000-000000000099',
     status: 'AUTO_SUBMITTED',
@@ -448,7 +450,7 @@ test('expiry locks answers without client submission, extension resyncs and only
     page.getByRole('heading', { name: 'Kết quả bài thi', exact: true }),
   ).toHaveCount(0);
   paper.status = 'AUTO_SUBMITTED';
-  io.emit('attempt:submitted', {
+  io.of(WS_NAMESPACE).emit('attempt:submitted', {
     examId,
     attemptId,
     status: 'AUTO_SUBMITTED',

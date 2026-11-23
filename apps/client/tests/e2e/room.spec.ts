@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
+import { WS_NAMESPACE } from '@online-exam/shared';
 import { buildPaper, attemptId } from '../fixtures/exam-fixture';
 
 // A protocol fixture owned by the frontend tests, not the project's backend.
@@ -38,7 +39,8 @@ test.beforeAll(async () => {
   io = new Server(http, {
     cors: { origin: 'http://localhost:5174', credentials: true },
   });
-  io.on('connection', (socket) => {
+  io.of('/').use((_socket, next) => next(new Error('Use /exam namespace')));
+  io.of(WS_NAMESPACE).on('connection', (socket) => {
     socket.on('attempt:rejoin', (payload, ack) => {
       expect(payload).toEqual({ attemptId });
       ack({
@@ -86,7 +88,7 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
-  io.disconnectSockets(true);
+  io.of(WS_NAMESPACE).disconnectSockets(true);
   status = 'SCHEDULED';
   participantCount = 4;
   rejectedCode = null;
@@ -231,7 +233,7 @@ test('room restores after reload, refreshes authoritative counts and starts only
     page.getByRole('heading', { name: 'Đã vào phòng, chờ giáo viên bắt đầu' }),
   ).toBeVisible();
   participantCount = 6;
-  io.emit('participant:joined', {
+  io.of(WS_NAMESPACE).emit('participant:joined', {
     examId,
     userId: '96ed2849-40c0-4e85-85d4-a85f3aff1f02',
     role: 'STUDENT',
@@ -240,12 +242,12 @@ test('room restores after reload, refreshes authoritative counts and starts only
     timeout: 10000,
   });
   status = 'RUNNING';
-  io.emit('exam:started', {
+  io.of(WS_NAMESPACE).emit('exam:started', {
     ...clock(),
     examId: 'c9ec68a2-0000-4000-8000-000000000099',
   });
   await expect(page).toHaveURL(`/exam/${examId}/waiting`);
-  io.emit('exam:started', clock());
+  io.of(WS_NAMESPACE).emit('exam:started', clock());
   await expect(page).toHaveURL(`/exam/${examId}/take`);
   await expect(
     page.getByRole('heading', { name: 'Bài thi của bạn', exact: true }),
@@ -285,22 +287,28 @@ test('transport reconnect rejoins and recovers a start event missed while discon
   await joinRoom(page);
   const previousJoins = joins.length;
   participantCount = 5;
-  io.emit('participant:joined', {
+  io.of(WS_NAMESPACE).emit('participant:joined', {
     examId,
     userId: profile.id,
     role: 'STUDENT',
   });
-  for (const socket of io.sockets.sockets.values()) socket.conn.close();
+  for (const socket of io.of(WS_NAMESPACE).sockets.values())
+    socket.conn.close();
   await expect.poll(() => joins.length).toBeGreaterThan(previousJoins);
   await expect(page.getByTestId('participant-count')).toHaveText('5 kết nối');
   participantCount = 3;
-  io.emit('participant:left', { examId, userId: profile.id, role: 'STUDENT' });
+  io.of(WS_NAMESPACE).emit('participant:left', {
+    examId,
+    userId: profile.id,
+    role: 'STUDENT',
+  });
   await expect(page.getByTestId('participant-count')).toHaveText('3 kết nối', {
     timeout: 10000,
   });
   const restoredJoins = joins.length;
   status = 'RUNNING';
-  for (const socket of io.sockets.sockets.values()) socket.conn.close();
+  for (const socket of io.of(WS_NAMESPACE).sockets.values())
+    socket.conn.close();
   await expect(page).toHaveURL(`/exam/${examId}/take`, { timeout: 15000 });
   expect(joins.length).toBeGreaterThan(restoredJoins);
 });
@@ -331,13 +339,13 @@ test('room end stays in a closed waiting room and a replaced session returns to 
 }) => {
   await joinRoom(page);
   status = 'ENDED';
-  io.emit('exam:ended', clock());
+  io.of(WS_NAMESPACE).emit('exam:ended', clock());
   await expect(
     page.getByRole('heading', { name: 'Kỳ thi đã kết thúc', exact: true }),
   ).toBeVisible();
   await expect(page).toHaveURL(`/exam/${examId}/waiting`);
   signedIn = false;
-  io.emit('session:replaced', { reason: 'SESSION_REPLACED' });
+  io.of(WS_NAMESPACE).emit('session:replaced', { reason: 'SESSION_REPLACED' });
   await expect(page.getByRole('alert')).toContainText('được thay thế');
   await page
     .getByRole('button', { name: 'Đăng nhập lại', exact: true })

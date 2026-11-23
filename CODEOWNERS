@@ -1,0 +1,17 @@
+# Điền GitHub handle thật trước khi bật required code-owner review.
+# Các dòng mẫu đang comment vì repo chưa cung cấp danh tính thành viên.
+# /apps/server/src/modules/auth/ @tv1
+# /apps/server/src/modules/questions/ @tv2
+# /apps/server/src/modules/exams/ @tv2
+# /apps/server/src/modules/attempts/ @tv2
+# /apps/server/src/modules/results/ @tv2
+# /database/ @tv2
+# /apps/server/src/modules/realtime/ @tv3
+# /apps/client/src/features/teacher/ @tv4
+# /apps/client/src/features/student/ @tv5
+# /apps/client/src/components/ @tv5
+# /packages/shared/ @tv1
+# /docs/ @tv1
+# /.github/ @tv1
+# /Dockerfile @tv1
+# /docker-compose.yml @tv1

@@ -89,13 +89,11 @@ export function createApiExamService(): ExamService {
     async result(_userId, examId, attemptId) {
       z.string().uuid().parse(examId);
       z.string().uuid().parse(attemptId);
-      const { data } = z
-        .object({ data: attemptResultSchema })
-        .parse(
-          await apiFetch<unknown>(`/api/v1/attempts/${attemptId}/result`, {
-            signal: AbortSignal.timeout(12000),
-          }),
-        );
+      const { data } = z.object({ data: attemptResultSchema }).parse(
+        await apiFetch<unknown>(`/api/v1/attempts/${attemptId}/result`, {
+          signal: AbortSignal.timeout(12000),
+        }),
+      );
       if (data.attemptId !== attemptId || data.examId !== examId)
         throw new ExamError('RESPONSE_MISMATCH');
       return data;

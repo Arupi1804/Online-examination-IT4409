@@ -1,12 +1,13 @@
 # Frontend Online Examination
 
 React 18, Vite 6, TypeScript 5.8, Tailwind CSS 3 và pnpm 10.11.
-Chạy lệnh tại `apps/client` với Node 20.19.5.
+Chạy lệnh tại root repository với Node 20.19.5. Frontend là package
+`@online-exam/client`; toàn workspace dùng duy nhất `pnpm-lock.yaml` ở root.
 
 ```powershell
-pnpm.cmd install
-pnpm.cmd build
-pnpm.cmd dev
+pnpm.cmd install --frozen-lockfile
+pnpm.cmd --filter @online-exam/shared build
+pnpm.cmd --filter @online-exam/client dev
 ```
 
 Mở `http://localhost:5173/login`.
@@ -38,15 +39,18 @@ Trong mock development, dùng `K7M2QX` cho phòng chờ, `RUN2AB` cho kỳ thi
 đang chạy và `ENDED2` để thử lỗi kỳ thi đã kết thúc. Các mã khác báo không
 tìm thấy phòng. Mock không tự bắt đầu kỳ thi và không kết nối backend thật.
 
-Socket.IO mặc định đi qua Vite proxy `/socket.io` tới cổng 3000. Khi backend
+Hai adapter phòng chờ và bài làm dùng namespace `/exam` từ shared contract.
+Engine.IO vẫn đi qua Vite proxy `/socket.io` tới cổng 3000. Khi backend
 chạy riêng, đặt `VITE_API_URL` thành origin của backend (ví dụ
 `http://localhost:3000`, không kèm `/api/v1`). Có thể đặt riêng
 `VITE_REALTIME_URL` nếu realtime ở origin khác. Backend phải cho phép origin
 frontend và cookie session khi gọi chéo origin.
 
-REST tham chiếu `docs/openapi.yaml` trên `origin/dev` tại `eda2bef`.
+REST tham chiếu `docs/openapi.yaml` trên `origin/dev` tại `0411336`.
 Adapter realtime tham chiếu `docs/ws-events.md` trên `origin/feature/realtime`;
-payload này chưa được merge vào `dev`, cần xác nhận tích hợp với #3.
+payload chi tiết này chưa được merge vào `dev`, cần xác nhận tích hợp với #3.
+Nhánh `dev` hiện có Auth/Questions; các endpoint phòng thi, bài làm, kết quả
+và handler realtime vẫn cần được backend ghép vào trước khi kiểm tra toàn luồng thật.
 Contract hiện có `participantCount` là số socket, chưa có danh sách tên
 thí sinh. Frontend không gọi API chi tiết đề thi của giáo viên để lấy dữ liệu.
 
@@ -139,12 +143,15 @@ server và sẽ được khởi tạo lại khi tải lại trang.
 
 ```powershell
 pnpm.cmd check
-pnpm.cmd test:e2e
+pnpm.cmd --filter @online-exam/client test:e2e
 ```
 
 Unit test dùng fetch giả lập, độc lập với URL backend trong `.env.local`.
 Các E2E test dùng HTTP response fixtures theo contract Auth/ExamJoinInfo
 và AttemptPaper/SavedAnswer/submit/result cùng Socket.IO server test tại cổng 5190.
+Fixture chỉ nhận sự kiện tại namespace `/exam`, từ chối namespace `/` để bắt
+lỗi cấu hình adapter. Bộ smoke test tại root dùng Auth/backend thật, chạy
+bằng `pnpm.cmd test:e2e` khi PostgreSQL và Redis đã sẵn sàng.
 Kiểm tra ACK, sự kiện, reconnect, timeout, thứ tự autosave, khôi phục bài,
 nộp bài sau khi lưu xong, khóa khi hết giờ, mất mạng/reload, heartbeat,
 chuyển tab/fullscreen, bảo vệ kết quả chưa công bố và dọn kết nối.
