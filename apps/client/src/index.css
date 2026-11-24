@@ -1,0 +1,77 @@
+@import '@fontsource-variable/geist';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 247 249 252;
+    --foreground: 23 35 61;
+    --card: 255 255 255;
+    --card-foreground: 23 35 61;
+    --popover: 255 255 255;
+    --popover-foreground: 23 35 61;
+    --primary: 37 91 221;
+    --primary-foreground: 255 255 255;
+    --secondary: 234 240 253;
+    --secondary-foreground: 35 77 168;
+    --muted: 237 241 247;
+    --muted-foreground: 92 103 125;
+    --accent: 234 240 253;
+    --accent-foreground: 35 77 168;
+    --destructive: 198 40 64;
+    --border: 220 227 238;
+    --input: 205 214 228;
+    --ring: 53 101 232;
+    --success: 22 115 77;
+    --success-foreground: 255 255 255;
+    --warning: 148 96 0;
+    --brand-panel: 19 38 79;
+    --radius: 0.75rem;
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-sm: calc(var(--radius) - 4px);
+  }
+
+  .dark {
+    --background: 15 23 42;
+    --foreground: 241 245 249;
+    --card: 23 35 61;
+    --card-foreground: 241 245 249;
+    --popover: 23 35 61;
+    --popover-foreground: 241 245 249;
+    --primary: 143 177 255;
+    --primary-foreground: 19 38 79;
+    --secondary: 37 50 78;
+    --secondary-foreground: 219 231 255;
+    --muted: 37 50 78;
+    --muted-foreground: 174 189 211;
+    --accent: 37 50 78;
+    --accent-foreground: 219 231 255;
+    --destructive: 255 140 155;
+    --border: 61 76 103;
+    --input: 83 101 134;
+    --ring: 143 177 255;
+    --success: 116 214 168;
+    --success-foreground: 16 40 29;
+    --warning: 244 200 108;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.auth-grid {
+  background-image:
+    linear-gradient(#ffffff08 1px, transparent 1px),
+    linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: linear-gradient(to bottom, transparent, #000 40%, transparent);
+}

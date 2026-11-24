@@ -19,9 +19,9 @@ test('client reaches the API through the development proxy', async ({
     .toBe(200);
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: 'Online Examination' }),
+    page.getByRole('heading', { name: 'Đăng nhập', exact: true }),
   ).toBeVisible();
-  await expect(page.getByText('API: ok', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
 });
 
 test('browser login JSON reaches Auth from the configured origin', async ({
