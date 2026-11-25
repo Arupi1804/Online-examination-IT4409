@@ -96,11 +96,11 @@ describe.skipIf(!process.env.AUTH_DATABASE_URL)(
           },
         });
         expect((await repository.examByCode(roomCode)).id).toBe(examId);
-        await repository.canJoin(
-          await repository.exam(examId),
-          student,
-          roomCode,
-        );
+        const draft = await repository.exam(examId);
+        await repository.canJoin(draft, teacher);
+        await expect(
+          repository.canJoin(draft, student, roomCode),
+        ).rejects.toMatchObject({ code: 'NOT_FOUND' });
         await expect(repository.start(examId, teacher)).rejects.toMatchObject({
           code: 'INVALID_STATE',
         });
@@ -118,6 +118,11 @@ describe.skipIf(!process.env.AUTH_DATABASE_URL)(
           where: { id: examId },
           data: { status: 'SCHEDULED' },
         });
+        await repository.canJoin(
+          await repository.exam(examId),
+          student,
+          roomCode,
+        );
         await expect(repository.start(examId, student)).rejects.toMatchObject({
           code: 'FORBIDDEN',
         });

@@ -137,6 +137,8 @@ export class RealtimeRepository {
       return;
     if (principal.role !== 'STUDENT')
       throw new RealtimeError('FORBIDDEN', 'Exam access denied');
+    if (exam.status === 'DRAFT')
+      throw new RealtimeError('NOT_FOUND', 'Exam not found');
     // Mã phòng hợp lệ cho phép học sinh vào; khi kết nối lại dùng bài làm đã có
     if (roomCode === exam.room_code) return;
     const attempt = await this.prisma.attempt.findFirst({
