@@ -49,3 +49,5 @@ jobs:
       - run: pnpm check
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e --project=chromium
+      - name: Student UI and realtime namespace fixtures
+        run: pnpm --filter @online-exam/client test:e2e --project=chromium

@@ -13,6 +13,8 @@ export default tseslint.config(
       '**/playwright-report/**',
       '**/test-results/**',
       '.cache/**',
+      'tmp/**',
+      'test-pnpm/**',
     ],
   },
   js.configs.recommended,
