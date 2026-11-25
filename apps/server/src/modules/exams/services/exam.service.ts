@@ -18,7 +18,6 @@ const detailInclude = {
   },
 } satisfies Prisma.ExamInclude;
 type DetailRow = Prisma.ExamGetPayload<{ include: typeof detailInclude }>;
-type Db = PrismaClient | Prisma.TransactionClient;
 
 const notFound = () =>
   new HttpError(404, ERROR_CODES.NOT_FOUND, 'Exam not found');
@@ -83,15 +82,26 @@ const questionRows = (input: ExamInput) =>
     points: q.points,
   }));
 
-async function assertOwnQuestions(db: Db, ownerId: string, input: ExamInput) {
+/**
+ * Checks that the chosen questions exist and belong to the teacher, and
+ * locks them FOR SHARE until the transaction that links them commits. A
+ * concurrent delete then either finishes first (reported here as an unknown
+ * question) or waits and finds the question in use (409 QUESTION_IN_USE).
+ */
+async function lockOwnQuestions(
+  tx: Prisma.TransactionClient,
+  ownerId: string,
+  input: ExamInput,
+) {
   const ids = input.questions.map((q) => q.questionId);
   if (ids.length === 0) return;
   const owned = new Set(
     (
-      await db.question.findMany({
-        where: { id: { in: ids }, ownerId },
-        select: { id: true },
-      })
+      await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM questions
+        WHERE id = ANY(${ids}::uuid[]) AND owner_id = ${ownerId}::uuid
+        ORDER BY id
+        FOR SHARE`
     ).map((q) => q.id),
   );
   const details = input.questions.flatMap((q, i) =>
@@ -164,20 +174,22 @@ export async function createExam(
   ownerId: string,
   input: ExamInput,
 ) {
-  await assertOwnQuestions(prisma, ownerId, input);
   // 32^6 codes: a clash is rare, so retry a few times on the unique index.
   for (let attempt = 1; ; attempt++) {
     try {
-      const row = await prisma.exam.create({
-        data: {
-          ownerId,
-          roomCode: newRoomCode(),
-          ...examFields(input),
-          questions: { create: questionRows(input) },
-        },
-        include: detailInclude,
+      return await prisma.$transaction(async (tx) => {
+        await lockOwnQuestions(tx, ownerId, input);
+        const row = await tx.exam.create({
+          data: {
+            ownerId,
+            roomCode: newRoomCode(),
+            ...examFields(input),
+            questions: { create: questionRows(input) },
+          },
+          include: detailInclude,
+        });
+        return toExamDetailDto(row);
       });
-      return toExamDetailDto(row);
     } catch (error) {
       const clash =
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -194,8 +206,9 @@ export async function updateExam(
   input: ExamInput,
 ) {
   return prisma.$transaction(async (tx) => {
+    // Same order as publish (exam, then its questions): no deadlock.
     await lockDraft(tx, ownerId, id);
-    await assertOwnQuestions(tx, ownerId, input);
+    await lockOwnQuestions(tx, ownerId, input);
     await tx.examQuestion.deleteMany({ where: { examId: id } });
     const row = await tx.exam.update({
       where: { id },

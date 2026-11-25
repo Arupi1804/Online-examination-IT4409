@@ -48,6 +48,9 @@ function appAs(user?: { id: string; role: Role }) {
   });
 }
 
+// The ownership check that must wait while a delete holds the question.
+const RACE_CREATE_WAIT = 'WHERE id = ANY(';
+
 const examInput = (
   questions: { questionId: string; points: number }[],
   title = 'Kiểm tra 15 phút',
@@ -341,6 +344,43 @@ describe.skipIf(!process.env.DATABASE_URL)('exams API', () => {
       .send({ roomCode: exam.roomCode });
     expect(ended.status).toBe(422);
     expect(ended.body.error.code).toBe('EXAM_ENDED');
+  });
+
+  it('reports a question deleted while the exam is being created', async () => {
+    const doomed = await newQuestion(ids.teacher, 'Sắp bị xóa');
+    // A delete in progress: holds the question row, then removes it.
+    let commit!: () => void;
+    const committed = new Promise<void>((resolve) => (commit = resolve));
+    let locked!: () => void;
+    const lockHeld = new Promise<void>((resolve) => (locked = resolve));
+    const removal = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM questions
+          WHERE id = ${doomed}::uuid FOR UPDATE`;
+        locked();
+        await committed;
+        await tx.question.delete({ where: { id: doomed } });
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+
+    const title = `Race ${randomUUID()}`;
+    const create = request(teacher)
+      .post('/api/v1/exams')
+      .send(examInput([{ questionId: doomed, points: 1 }], title))
+      .then((res) => res);
+    try {
+      await waitForLockWait(prisma, RACE_CREATE_WAIT);
+    } finally {
+      commit();
+      await removal;
+    }
+    const res = await create;
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_FAILED');
+    expect(res.body.error.details[0].field).toBe('questions.0.questionId');
+    expect(await prisma.exam.count({ where: { title } })).toBe(0);
   });
 
   it('makes publish wait for an in-flight question edit', async () => {
