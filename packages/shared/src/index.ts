@@ -49,7 +49,7 @@ export const RoomCode = z.string().regex(/^[A-HJ-NP-Z2-9]{6}$/);
 // Points are stored as NUMERIC(10, 2): reject more than two decimals.
 const Points = z
   .number()
-  .positive()
+  .min(0.01, 'Points must be at least 0.01')
   .max(100)
   .refine((p) => Math.abs(p * 100 - Math.round(p * 100)) < 1e-9, {
     message: 'At most two decimal places',

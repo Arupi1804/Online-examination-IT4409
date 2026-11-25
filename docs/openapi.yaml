@@ -1118,8 +1118,7 @@ components:
                 format: uuid
               points:
                 type: number
-                exclusiveMinimum: true
-                minimum: 0
+                minimum: 0.01
                 maximum: 100
     Exam:
       type: object

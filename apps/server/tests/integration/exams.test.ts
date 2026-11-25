@@ -193,6 +193,34 @@ describe.skipIf(!process.env.DATABASE_URL)('exams API', () => {
     expect(decimals.status).toBe(400);
   });
 
+  it('validates the minimum question points on create and update', async () => {
+    const questions = [{ questionId: questionIds[0]!, points: 1e-12 }];
+    const invalidPointsError = {
+      code: 'VALIDATION_FAILED',
+      details: [
+        { field: 'questions.0.points', issue: 'Points must be at least 0.01' },
+      ],
+    };
+
+    const invalidCreate = await request(teacher)
+      .post('/api/v1/exams')
+      .send(examInput(questions));
+    expect(invalidCreate.status).toBe(400);
+    expect(invalidCreate.body.error).toMatchObject(invalidPointsError);
+
+    const created = await request(teacher)
+      .post('/api/v1/exams')
+      .send(examInput([{ questionId: questionIds[0]!, points: 0.01 }]));
+    expect(created.status).toBe(201);
+    expect(created.body.data.totalPoints).toBe(0.01);
+
+    const invalidUpdate = await request(teacher)
+      .put(`/api/v1/exams/${created.body.data.id}`)
+      .send(examInput(questions));
+    expect(invalidUpdate.status).toBe(400);
+    expect(invalidUpdate.body.error).toMatchObject(invalidPointsError);
+  });
+
   it("lists only own exams and hides other teachers' exams", async () => {
     const mine = await newExam();
     const list = await request(teacher).get(
