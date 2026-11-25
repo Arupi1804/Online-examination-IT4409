@@ -21,6 +21,7 @@ import {
 } from './modules/auth/index.js';
 import { mountRealtime } from './modules/realtime/index.js';
 import { createQuestionsRouter } from './modules/questions/controllers/questions.controller.js';
+import { createExamsRouter } from './modules/exams/controllers/exams.controller.js';
 
 config({ path: findWorkspaceEnv(import.meta.url) ?? '.env' });
 const env = z
@@ -89,6 +90,13 @@ try {
   apiRouter.use(
     '/questions',
     createQuestionsRouter(prisma, sessions.requireRoles('TEACHER')),
+  );
+  apiRouter.use(
+    '/exams',
+    createExamsRouter(prisma, {
+      teacher: sessions.requireRoles('TEACHER'),
+      student: sessions.requireRoles('STUDENT'),
+    }),
   );
   const server = createServer(
     createApp(settings.CLIENT_ORIGIN, {

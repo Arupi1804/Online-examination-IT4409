@@ -11,6 +11,7 @@
     "check": "pnpm typecheck",
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
     "prisma": "node --env-file=../../.env node_modules/prisma/build/index.js",
     "db:validate": "pnpm prisma validate",
     "db:diff": "pnpm prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code"
