@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
-  testDir: './apps/client/tests/e2e',
+  testDir: './tests/e2e',
   testMatch: '**/workspace.spec.ts',
   projects: [
     {

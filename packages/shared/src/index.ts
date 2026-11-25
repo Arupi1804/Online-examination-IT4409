@@ -46,6 +46,44 @@ export const AttemptStatus = z.enum([
   'FORCE_SUBMITTED',
 ]);
 export const RoomCode = z.string().regex(/^[A-HJ-NP-Z2-9]{6}$/);
+// Points are stored as NUMERIC(10, 2): reject more than two decimals.
+const Points = z
+  .number()
+  .min(0.01, 'Points must be at least 0.01')
+  .max(100)
+  .refine((p) => Math.abs(p * 100 - Math.round(p * 100)) < 1e-9, {
+    message: 'At most two decimal places',
+  });
+export const ExamInput = z.object({
+  title: z.string().trim().min(1).max(200),
+  durationSec: z.number().int().min(60).max(14_400),
+  shuffleQuestions: z.boolean().default(false),
+  shuffleOptions: z.boolean().default(false),
+  maxAttempts: z.number().int().min(1).max(10).default(1),
+  questions: z
+    .array(
+      z.object({
+        questionId: z
+          .string()
+          .uuid()
+          .transform((id) => id.toLowerCase()),
+        points: Points,
+      }),
+    )
+    .max(200)
+    .refine((qs) => new Set(qs.map((q) => q.questionId)).size === qs.length, {
+      message: 'A question can appear only once',
+    }),
+});
+export type ExamInput = z.infer<typeof ExamInput>;
+// Codes are shown uppercase; accept what a student types in either case.
+export const JoinExamInput = z.object({
+  roomCode: z
+    .string()
+    .trim()
+    .transform((code) => code.toUpperCase())
+    .pipe(RoomCode),
+});
 export const ViolationType = z.enum([
   'TAB_BLUR',
   'FULLSCREEN_EXIT',

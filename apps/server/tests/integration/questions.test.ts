@@ -13,6 +13,7 @@ import {
   AuthSessionStore,
 } from '../../src/modules/auth/index.js';
 import { createQuestionsRouter } from '../../src/modules/questions/controllers/questions.controller.js';
+import { waitForLockWait } from './lock-wait.js';
 
 // Uses PostgreSQL with database/init/*.sql applied: CI's service, or locally
 // `pnpm infra:up` with the root .env. Skipped when DATABASE_URL is unset.
@@ -27,24 +28,6 @@ const sessions = new AuthSessions({
   secureCookie: false,
 });
 let prisma: PrismaClient;
-
-// Polls until some statement on `questions` is blocked by a row lock.
-async function waitForQuestionLockWait() {
-  for (let i = 0; i < 100; i++) {
-    const [row] = await prisma.$queryRaw<{ waiting: number }[]>`
-      SELECT count(*)::int AS waiting FROM pg_stat_activity
-      WHERE datname = current_database() AND wait_event_type = 'Lock'
-        AND query ILIKE '%questions%'`;
-    if (row && row.waiting > 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const sessions = await prisma.$queryRaw<unknown[]>`
-    SELECT state, wait_event_type, wait_event, left(query, 80) AS query
-    FROM pg_stat_activity WHERE datname = current_database()`;
-  throw new Error(
-    `the edit never waited for the publish lock: ${JSON.stringify(sessions)}`,
-  );
-}
 
 // Stands in for the session middleware: signs the request in as `user`.
 function appAs(user?: { id: string; role: Role }) {
@@ -314,7 +297,7 @@ describe.skipIf(!process.env.DATABASE_URL)('questions API', () => {
       .send(single('Sau khi publish'))
       .then((res) => res);
     try {
-      await waitForQuestionLockWait();
+      await waitForLockWait(prisma, 'SELECT id FROM questions');
     } finally {
       commit(); // never leave the publish holding its locks
       await publish;
