@@ -141,7 +141,7 @@ describe.skipIf(!process.env.DATABASE_URL)('exams API', () => {
       .post('/api/v1/exams')
       .send(
         examInput([
-          { questionId: questionIds[1]!, points: 2.5 },
+          { questionId: questionIds[1]!.toUpperCase(), points: 2.5 },
           { questionId: questionIds[0]!, points: 1 },
         ]),
       );
@@ -182,10 +182,16 @@ describe.skipIf(!process.env.DATABASE_URL)('exams API', () => {
       .send(
         examInput([
           { questionId: questionIds[0]!, points: 1 },
-          { questionId: questionIds[0]!, points: 1 },
+          { questionId: questionIds[0]!.toUpperCase(), points: 1 },
         ]),
       );
     expect(duplicate.status).toBe(400);
+    expect(duplicate.body.error).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: [
+        { field: 'questions', issue: 'A question can appear only once' },
+      ],
+    });
 
     const decimals = await request(teacher)
       .post('/api/v1/exams')
@@ -247,7 +253,10 @@ describe.skipIf(!process.env.DATABASE_URL)('exams API', () => {
     const edited = await request(teacher)
       .put(`/api/v1/exams/${exam.id}`)
       .send({
-        ...examInput([{ questionId: questionIds[2]!, points: 4 }], 'Đã sửa'),
+        ...examInput(
+          [{ questionId: questionIds[2]!.toUpperCase(), points: 4 }],
+          'Đã sửa',
+        ),
         shuffleOptions: true,
         maxAttempts: 2,
       });

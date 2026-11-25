@@ -61,7 +61,15 @@ export const ExamInput = z.object({
   shuffleOptions: z.boolean().default(false),
   maxAttempts: z.number().int().min(1).max(10).default(1),
   questions: z
-    .array(z.object({ questionId: z.string().uuid(), points: Points }))
+    .array(
+      z.object({
+        questionId: z
+          .string()
+          .uuid()
+          .transform((id) => id.toLowerCase()),
+        points: Points,
+      }),
+    )
     .max(200)
     .refine((qs) => new Set(qs.map((q) => q.questionId)).size === qs.length, {
       message: 'A question can appear only once',
