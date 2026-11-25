@@ -116,3 +116,69 @@ test('a failed exam does not stop startup recovery for other exams', async () =>
     worker.stop();
   }
 });
+
+test('periodic monitor sync retries missed offline and online updates', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const examId = '33333333-3333-4333-8333-333333333333';
+  const offlineId = '44444444-4444-4444-8444-444444444444';
+  const onlineId = '55555555-5555-4555-8555-555555555555';
+  const exam: Exam = {
+    id: examId,
+    owner_id: '11111111-1111-4111-8111-111111111111',
+    room_code: 'ABC234',
+    status: 'RUNNING',
+    start_time: new Date(now - 30_000),
+    end_time: new Date(now + 120_000),
+    duration_sec: 150,
+  };
+  let markedOffline = false;
+  let failures = 2;
+  const sent: string[] = [];
+  const errors: string[] = [];
+  const service = {
+    db: {
+      runningExams: async () => [exam],
+      unfinishedEndedExams: async () => [],
+      monitor: async () => [offlineId, onlineId],
+    },
+    cache: {
+      offlineCandidates: async () => [offlineId],
+      markOffline: async () => {
+        if (markedOffline) return false;
+        markedOffline = true;
+        return true;
+      },
+    },
+  } as unknown as RealtimeService;
+  const gateway = {
+    emitTimerSync: () => {},
+    emitStudentUpdate: async (id: string) => {
+      sent.push(id);
+      if (id === offlineId && failures-- > 0) throw new Error('socket failed');
+    },
+  } as unknown as RealtimeGateway;
+  const worker = new RealtimeWorker(service, gateway, {
+    error: (message: string) => errors.push(message),
+  });
+  try {
+    await worker.tick(); // Redis đổi sang offline nhưng thông báo đầu tiên thất bại.
+    now += 31_000;
+    await worker.tick(); // Cờ offline đã có; đồng bộ định kỳ vẫn thử gửi lại.
+    now += 31_000;
+    await worker.tick();
+    assert.deepEqual(sent, [
+      offlineId,
+      offlineId,
+      onlineId,
+      offlineId,
+      onlineId,
+    ]);
+    assert.deepEqual(errors, [
+      'Monitor update after offline failed',
+      'Periodic monitor update failed',
+    ]);
+  } finally {
+    worker.stop();
+  }
+});

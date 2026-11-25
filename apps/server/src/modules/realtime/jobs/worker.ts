@@ -13,6 +13,7 @@ export class RealtimeWorker {
   private deadlines = new Map<string, ReturnType<typeof setTimeout>>();
   private busy = false;
   private lastSync = 0;
+  private lastMonitorSync = Date.now();
   constructor(
     private readonly service: RealtimeService,
     private readonly gateway: RealtimeGateway,
@@ -94,6 +95,7 @@ export class RealtimeWorker {
       const running = await this.service.db.runningExams();
       const ended = await this.service.db.unfinishedEndedExams();
       const now = Date.now();
+      const refreshMonitor = now - this.lastMonitorSync >= 30_000;
 
       // Duyệt cả kỳ thi đang thi và kỳ thi cần phục hồi sau lỗi
       for (const exam of [...running, ...ended]) {
@@ -119,8 +121,32 @@ export class RealtimeWorker {
             exam.id,
             now - 30_000,
           )) {
-            if (await this.service.cache.markOffline(exam.id, id, now - 30_000))
-              await this.gateway.emitStudentUpdate(id);
+            try {
+              if (
+                await this.service.cache.markOffline(exam.id, id, now - 30_000)
+              )
+                await this.gateway.emitStudentUpdate(id);
+            } catch (error) {
+              this.logger.error('Monitor update after offline failed', {
+                examId: exam.id,
+                attemptId: id,
+                error,
+              });
+            }
+          }
+          // Phát lại trạng thái hiện tại để khôi phục sự kiện online/offline bị lỡ.
+          if (refreshMonitor) {
+            for (const id of await this.service.db.monitor(exam.id)) {
+              try {
+                await this.gateway.emitStudentUpdate(id);
+              } catch (error) {
+                this.logger.error('Periodic monitor update failed', {
+                  examId: exam.id,
+                  attemptId: id,
+                  error,
+                });
+              }
+            }
           }
         } catch (error) {
           this.logger.error('Realtime exam sync failed', {
@@ -130,6 +156,7 @@ export class RealtimeWorker {
         }
       }
       this.lastSync = now;
+      if (refreshMonitor) this.lastMonitorSync = Date.now();
     } finally {
       this.busy = false;
     }
