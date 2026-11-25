@@ -235,3 +235,40 @@ test('room join, role check, rejoin and live session revocation', async () => {
   assert.deepEqual(await replaced, {});
   assert.equal(f.calls.filter((x) => x === 'start').length, 1);
 });
+
+test('timer sync ignores a stale deadline after an extension', async () => {
+  const f = await fixture();
+  const student = f.connect('student');
+  await connected(student);
+  const joined = await student.emitWithAck('room:join', { examId: f.examId });
+  assert.equal(joined.ok, true);
+
+  const received: string[] = [];
+  student.on('timer:sync', (state: { endTime: string }) => {
+    received.push(state.endTime);
+  });
+  const newer = {
+    examId: f.examId,
+    status: 'RUNNING' as const,
+    startTime: '2026-01-01T00:00:00.000Z',
+    endTime: '2026-01-01T01:30:00.000Z',
+    serverTime: '2026-01-01T00:01:00.000Z',
+  };
+  const receivedNewer = new Promise<void>((resolve) =>
+    student.once('timer:sync', () => resolve()),
+  );
+  f.gateway.emitTimerSync(newer);
+  await receivedNewer;
+  f.gateway.emitTimerSync({
+    ...newer,
+    endTime: '2026-01-01T01:00:00.000Z',
+    serverTime: '2026-01-01T00:02:00.000Z',
+  });
+  const latest = { ...newer, endTime: '2026-01-01T02:00:00.000Z' };
+  const receivedLatest = new Promise<void>((resolve) =>
+    student.once('timer:sync', () => resolve()),
+  );
+  f.gateway.emitTimerSync(latest);
+  await receivedLatest;
+  assert.deepEqual(received, [newer.endTime, latest.endTime]);
+});

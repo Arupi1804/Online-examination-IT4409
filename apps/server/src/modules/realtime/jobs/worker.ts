@@ -97,24 +97,36 @@ export class RealtimeWorker {
 
       // Duyệt cả kỳ thi đang thi và kỳ thi cần phục hồi sau lỗi
       for (const exam of [...running, ...ended]) {
-        if (exam.end_time && exam.end_time.getTime() + 5000 < now)
-          await this.finish(exam.id);
-        else if (exam.status === 'RUNNING') this.arm(exam);
+        try {
+          if (exam.end_time && exam.end_time.getTime() + 5000 < now)
+            await this.finish(exam.id);
+          else if (exam.status === 'RUNNING') this.arm(exam);
+        } catch (error) {
+          this.logger.error('Realtime exam deadline failed', {
+            examId: exam.id,
+            error,
+          });
+        }
       }
 
       // Chỉ kỳ thi đang mở mới cần đồng hồ/heartbeat
       for (const exam of running) {
-        if (!exam.end_time || exam.end_time.getTime() <= now) continue;
-        if (now - this.lastSync >= 10_000)
-          this.gateway.namespace
-            .to(`exam:${exam.id}`)
-            .emit(serverEvents.timerSync, clock(exam));
-        for (const id of await this.service.cache.offlineCandidates(
-          exam.id,
-          now - 30_000,
-        )) {
-          if (await this.service.cache.markOffline(exam.id, id, now - 30_000))
-            await this.gateway.emitStudentUpdate(id);
+        try {
+          if (!exam.end_time || exam.end_time.getTime() <= now) continue;
+          if (now - this.lastSync >= 10_000)
+            this.gateway.emitTimerSync(clock(exam));
+          for (const id of await this.service.cache.offlineCandidates(
+            exam.id,
+            now - 30_000,
+          )) {
+            if (await this.service.cache.markOffline(exam.id, id, now - 30_000))
+              await this.gateway.emitStudentUpdate(id);
+          }
+        } catch (error) {
+          this.logger.error('Realtime exam sync failed', {
+            examId: exam.id,
+            error,
+          });
         }
       }
       this.lastSync = now;

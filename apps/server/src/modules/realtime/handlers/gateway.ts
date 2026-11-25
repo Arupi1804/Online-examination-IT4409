@@ -5,6 +5,7 @@ import {
   clientEvents,
   serverEvents,
   type Ack,
+  type ExamClock,
   type Submitted,
 } from '../../../shared/realtime.js';
 import { RealtimeError } from '../errors.js';
@@ -48,7 +49,16 @@ export type GatewayOptions = {
 export function createRealtimeGateway(options: GatewayOptions) {
   const { namespace, service } = options;
   const logger = options.logger ?? console;
+  const lastSyncedDeadline = new Map<string, number>();
   options.sessions.attachSocketAuthentication(namespace);
+
+  // Không phát snapshot worker cũ sau khi đã phát thời hạn gia hạn mới.
+  function emitTimerSync(state: ExamClock): void {
+    const deadline = state.endTime ? Date.parse(state.endTime) : 0;
+    if (deadline < (lastSyncedDeadline.get(state.examId) ?? 0)) return;
+    lastSyncedDeadline.set(state.examId, deadline);
+    namespace.to(`exam:${state.examId}`).emit(serverEvents.timerSync, state);
+  }
 
   // Phát attempt:submitted vào phòng riêng của user và phòng monitor
   function emitSubmitted(submission: Submitted): void {
@@ -120,7 +130,7 @@ export function createRealtimeGateway(options: GatewayOptions) {
       namespace
         .to(`exam:${clock.examId}`)
         .emit(serverEvents.examStarted, clock);
-      namespace.to(`exam:${clock.examId}`).emit(serverEvents.timerSync, clock);
+      emitTimerSync(clock);
       onScheduleChanged?.(clock.examId);
       return clock;
     });
@@ -131,7 +141,7 @@ export function createRealtimeGateway(options: GatewayOptions) {
       namespace
         .to(`exam:${clock.examId}`)
         .emit(serverEvents.examExtended, clock);
-      namespace.to(`exam:${clock.examId}`).emit(serverEvents.timerSync, clock);
+      emitTimerSync(clock);
       onScheduleChanged?.(clock.examId);
       return clock;
     });
@@ -230,6 +240,7 @@ export function createRealtimeGateway(options: GatewayOptions) {
     },
     emitSubmitted,
     emitStudentUpdate,
+    emitTimerSync,
 
     // Only detach realtime handlers; bootstrap owns Socket.IO shutdown.
     close() {
