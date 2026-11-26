@@ -42,7 +42,7 @@ export const QuestionCard = forwardRef<HTMLHeadingElement, Props>(
     ref,
   ) {
     return (
-      <Card className="min-w-0 gap-6 border p-5 sm:p-8">
+      <Card data-exam-content="" className="min-w-0 gap-6 border p-5 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="rounded-md bg-secondary px-2.5 py-1 font-medium text-primary">

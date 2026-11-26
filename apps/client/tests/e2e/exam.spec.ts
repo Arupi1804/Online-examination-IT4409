@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
-import { WS_NAMESPACE } from '@online-exam/shared';
+import { ViolationType, WS_NAMESPACE } from '@online-exam/shared';
 import {
   buildPaper,
   examId,
@@ -39,6 +39,8 @@ let detailsPublished: boolean;
 let resultOverride: unknown;
 let resultHttpError: number;
 let resultRequests: number;
+let violationAckMode: 'ok' | 'silent' | 'error';
+let skipHeartbeatAck: boolean;
 
 function clock(status = 'RUNNING') {
   return {
@@ -91,6 +93,10 @@ test.beforeAll(async () => {
     socket.on('proctor:heartbeat', (payload, ack) => {
       expect(payload).toEqual({ attemptId });
       heartbeatCalls.push(payload);
+      if (skipHeartbeatAck) {
+        skipHeartbeatAck = false;
+        return;
+      }
       ack({
         ok: true,
         data: { serverTime: new Date(Date.now() + offset).toISOString() },
@@ -103,8 +109,13 @@ test.beforeAll(async () => {
         'type',
       ]);
       expect(payload.attemptId).toBe(attemptId);
-      expect(['TAB_BLUR', 'FULLSCREEN_EXIT']).toContain(payload.type);
+      ViolationType.parse(payload.type);
       violations.push(payload);
+      if (violationAckMode === 'silent') return;
+      if (violationAckMode === 'error') {
+        ack({ ok: false, error: { code: 'RATE_LIMITED', message: 'Fixture' } });
+        return;
+      }
       ack({
         ok: true,
         data: { at: new Date(Date.now() + offset).toISOString() },
@@ -146,6 +157,8 @@ test.beforeEach(async ({ page }) => {
   resultOverride = null;
   resultHttpError = 0;
   resultRequests = 0;
+  violationAckMode = 'ok';
+  skipHeartbeatAck = false;
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/v1/auth/me') {
@@ -286,6 +299,31 @@ function holdSave() {
   saveGate = new Promise<void>((resolve) => {
     releaseSave = resolve;
   });
+}
+
+async function clipboard(
+  page: Page,
+  action: 'copy' | 'cut' | 'paste',
+  inside = true,
+) {
+  return page.evaluate(
+    ({ action, inside }) => {
+      const scope = document.querySelector(
+        inside ? '[data-exam-content]' : 'header',
+      )!;
+      const target = scope.querySelector('p') ?? scope;
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      // Exercise DOM event handling without accessing the system clipboard.
+      return target.dispatchEvent(
+        new Event(action, { bubbles: true, cancelable: true }),
+      );
+    },
+    { action, inside },
+  );
 }
 
 test('student answers all question types, clears choices, flags questions and restores saved work', async ({
@@ -565,6 +603,12 @@ test('offline choices stay queued and resume only after a fresh rejoin without c
   const timer = await page.getByTestId('exam-timer').innerText();
   await context.setOffline(true);
   await expect(page.getByTestId('network-status')).toContainText('mất kết nối');
+  await expect(
+    page.getByText(
+      'Sự kiện mất kết nối đang chờ xác nhận lại bài làm trước khi gửi.',
+    ),
+  ).toBeVisible();
+  expect(violations).toHaveLength(0);
   await page.getByRole('radio', { name: 'POST', exact: true }).check();
   await expect(page.getByTestId('save-status')).toContainText('đang chờ gửi');
   await expect(
@@ -581,7 +625,11 @@ test('offline choices stay queued and resume only after a fresh rejoin without c
   expect(starts).toBe(initialStarts);
   expect(rejoinCalls.length).toBeGreaterThan(initialRejoins);
   expect(answers.get(qid(1))?.selectedOptionIds).toEqual([oid(12)]);
-  expect(violations.some((event) => event.type === 'DISCONNECT')).toBe(false);
+  await expect
+    .poll(
+      () => violations.filter((event) => event.type === 'DISCONNECT').length,
+    )
+    .toBe(1);
 });
 
 test('pending answers survive a page reload and are reconciled before replay', async ({
@@ -626,6 +674,9 @@ test('a server-closed attempt never replays offline answers and opens the confir
   ).toBeVisible();
   expect(saveCalls).toHaveLength(0);
   expect(submits).toBe(0);
+  expect(
+    violations.filter((event) => event.type === 'DISCONNECT'),
+  ).toHaveLength(0);
   expect(
     await page.evaluate(
       () =>
@@ -678,6 +729,164 @@ test('proctoring sends heartbeat, deduplicates hidden transitions and records ac
   await expect(
     page.getByRole('radio', { name: 'GET', exact: true }),
   ).toBeEnabled();
+  expect(submits).toBe(0);
+});
+
+test('clipboard events inside questions use COPY_PASTE without reading contents, blocking the action or penalizing answers', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openExam(page);
+  for (const action of ['copy', 'cut', 'paste'] as const)
+    await clipboard(page, action, false);
+  expect(violations).toHaveLength(0);
+  for (const action of ['copy', 'cut', 'paste'] as const)
+    expect(await clipboard(page, action)).toBe(true);
+  await expect
+    .poll(
+      () => violations.filter((event) => event.type === 'COPY_PASTE').length,
+    )
+    .toBe(3);
+  await expect(
+    page.getByText(
+      'Bạn vừa thực hiện sao chép, cắt hoặc dán trong vùng câu hỏi.',
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/3 sự kiện, 3 đã được máy chủ xác nhận/),
+  ).toBeVisible();
+  violationAckMode = 'error';
+  await clipboard(page, 'copy');
+  await expect(
+    page.getByText('Có sự kiện chưa gửi hoặc chưa nhận được xác nhận.'),
+  ).toBeVisible();
+  expect(violations).toHaveLength(4);
+  violationAckMode = 'ok';
+  await clipboard(page, 'paste');
+  await expect(
+    page.getByText(/5 sự kiện, 4 đã được máy chủ xác nhận/),
+  ).toBeVisible();
+  await page.locator('[aria-labelledby="proctor-title"]').screenshot({
+    path: testInfo.outputPath('clipboard-warning.png'),
+  });
+  await page.getByRole('radio', { name: 'GET', exact: true }).check();
+  await saved(page);
+  expect(answers.get(qid(1))?.selectedOptionIds).toEqual([oid(11)]);
+  expect(submits).toBe(0);
+});
+
+test('a missing heartbeat ACK records one interruption and sends it after a fresh rejoin', async ({
+  page,
+}) => {
+  skipHeartbeatAck = true;
+  await openExam(page);
+  await expect
+    .poll(
+      () => violations.filter((event) => event.type === 'DISCONNECT').length,
+      { timeout: 15000 },
+    )
+    .toBe(1);
+  expect(rejoinCalls.length).toBeGreaterThan(1);
+  await expect(
+    page.getByText(/1 sự kiện, 1 đã được máy chủ xác nhận/),
+  ).toBeVisible();
+  expect(starts).toBe(1);
+  expect(submits).toBe(0);
+});
+
+test('transport loss waits for rejoin, reports once per outage and never replays a log with an uncertain ACK', async ({
+  page,
+}) => {
+  await openExam(page);
+  expect(violations).toHaveLength(0);
+  recoverPaused = true;
+  for (const socket of io.of(WS_NAMESPACE).sockets.values())
+    socket.conn.close();
+  await expect(
+    page.getByText(
+      'Sự kiện mất kết nối đang chờ xác nhận lại bài làm trước khi gửi.',
+    ),
+  ).toBeVisible();
+  await expect.poll(() => recoverCallbacks.length).toBeGreaterThan(0);
+  expect(violations).toHaveLength(0);
+  expect(submits).toBe(0);
+  // Simulate a log saved by the server whose ACK never reaches the client.
+  violationAckMode = 'silent';
+  recoverPaused = false;
+  for (const respond of recoverCallbacks.splice(0)) respond();
+  await expect
+    .poll(
+      () => violations.filter((event) => event.type === 'DISCONNECT').length,
+    )
+    .toBe(1);
+  const firstTimestamp = violations[0]!.clientAt;
+  violationAckMode = 'ok';
+  for (const socket of io.of(WS_NAMESPACE).sockets.values())
+    socket.conn.close();
+  await expect
+    .poll(
+      () => violations.filter((event) => event.type === 'DISCONNECT').length,
+    )
+    .toBe(2);
+  await expect(
+    page.getByText(/2 sự kiện, 1 đã được máy chủ xác nhận/),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Có sự kiện chưa gửi hoặc chưa nhận được xác nhận.'),
+  ).toBeVisible();
+  expect(
+    violations.filter((event) => event.clientAt === firstTimestamp),
+  ).toHaveLength(1);
+  expect(starts).toBe(1);
+  expect(submits).toBe(0);
+});
+
+test('initial join, deliberate reconnect and logout never create a disconnect violation', async ({
+  page,
+}) => {
+  recoverPaused = true;
+  await page.goto(`/exam/${examId}/take`);
+  await expect.poll(() => recoverCallbacks.length).toBeGreaterThan(0);
+  await page
+    .getByRole('button', { name: 'Thử kết nối lại', exact: true })
+    .click();
+  await expect.poll(() => recoverCallbacks.length).toBeGreaterThan(1);
+  recoverPaused = false;
+  for (const respond of recoverCallbacks.splice(0)) respond();
+  await expect(
+    page.getByText('Đang đồng bộ thời gian', { exact: true }),
+  ).toBeVisible();
+  expect(violations).toHaveLength(0);
+  await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click();
+  await expect(page).toHaveURL('/login');
+  expect(violations).toHaveLength(0);
+});
+
+test('pending disconnect and clipboard events are not reported after the deadline', async ({
+  page,
+  context,
+}) => {
+  paper = buildPaper(4, offset);
+  await openExam(page);
+  const initialRejoins = rejoinCalls.length;
+  await context.setOffline(true);
+  await expect(
+    page.getByText(
+      'Sự kiện mất kết nối đang chờ xác nhận lại bài làm trước khi gửi.',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('radio', { name: 'GET', exact: true }),
+  ).toBeDisabled({ timeout: 8000 });
+  await context.setOffline(false);
+  await expect.poll(() => rejoinCalls.length).toBeGreaterThan(initialRejoins);
+  await expect(
+    page.getByText('Đang đồng bộ thời gian', { exact: true }),
+  ).toBeVisible();
+  for (const action of ['copy', 'cut', 'paste'] as const)
+    await clipboard(page, action);
+  expect(violations).toHaveLength(0);
   expect(submits).toBe(0);
 });
 

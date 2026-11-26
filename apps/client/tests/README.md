@@ -113,7 +113,9 @@ zoom và trình đọc màn hình trên thiết bị thật.
 
 ### QA-AUTH-LIVE
 
-Nguồn: [workspace.spec.ts](e2e/workspace.spec.ts); chạy bằng `pnpm.cmd test:e2e`.
+Nguồn: [workspace.spec.ts](../../../tests/e2e/workspace.spec.ts); chạy bằng
+`pnpm.cmd test:e2e` từ root. Suite backend thật nằm trong `tests/e2e` tại root;
+các suite frontend dùng fixtures tiếp tục nằm trong `apps/client/tests/e2e`.
 
 1. Đăng ký tài khoản UUID riêng qua form thật, đăng nhập và mở `/join`.
 2. Tải lại trang để xác nhận cookie session còn hiệu lực.
@@ -122,6 +124,31 @@ Nguồn: [workspace.spec.ts](e2e/workspace.spec.ts); chạy bằng `pnpm.cmd tes
 Mong đợi: tạo STUDENT thành công, họ tên hiển thị đúng, tải lại vẫn đăng
 nhập, sau đăng xuất quay về login. Suite còn kiểm tra health qua proxy,
 credentials sai trả 401 và request từ Origin khác bị từ chối 403.
+
+### QA-PROCTOR
+
+Nguồn: [exam.spec.ts](e2e/exam.spec.ts) và
+[week5.test.ts](week5.test.ts). REST và Socket.IO dùng fixtures.
+
+- Chuyển tab/thoát fullscreen: giữ các ca đã có; chuyển trạng thái lặp
+  không tạo log trùng; hết giờ dừng quan sát.
+- Sao chép/cắt/dán: chỉ thao tác trong khung câu hỏi tạo `COPY_PASTE`;
+  thao tác ngoài khung không tạo log. Payload chỉ có ID bài, loại sự kiện
+  và clientAt; không có nội dung clipboard. Thao tác mặc định vẫn hoạt động,
+  đáp án vẫn chọn/lưu được và không tự nộp bài.
+- Browser offline: trong lúc mất mạng chưa gửi `DISCONNECT`; khi rejoin
+  thành công, gửi đúng một log cho đợt gián đoạn và tiếp tục lưu đáp án.
+- Mất socket trong khi browser vẫn online: chờ rejoin trước khi gửi log.
+  ACK bị mất không khiến log cũ bị phát lại; một đợt mất socket mới có
+  timestamp và log riêng.
+- Lần kết nối đầu, nút kết nối lại và đăng xuất: không tạo `DISCONNECT`.
+- Hết giờ hoặc server chốt bài trong lúc offline: không phát log mất kết
+  nối đang chờ và không nhận thêm sự kiện clipboard sau hạn.
+
+Các ca clipboard tự động phát DOM events với vùng chọn thật trong trang;
+không truy cập clipboard hệ điều hành. Khi kiểm thử thủ công, thử thêm
+phím tắt và menu ngữ cảnh trên các trình duyệt nhóm hỗ trợ. Đối chiếu cả
+bốn loại với `proctor_logs` sau khi handler realtime của #3 được tích hợp.
 
 ## Hồi quy và kiểm thử tích hợp tiếp theo
 
@@ -148,8 +175,9 @@ commit, bước tái hiện, kỳ vọng, thực tế và ảnh/trace nếu lỗ
 - Phiên và giám sát: đăng nhập thiết bị khác, session hết hạn, chuyển tab,
   vào/thoát fullscreen; đối chiếu log/heartbeat trên server.
 
-Trong snapshot hiện tại, backend có Auth, Questions và xác thực namespace;
-các route nghiệp vụ phòng/bài thi/kết quả và handler realtime tương ứng chưa
-được mount. Luồng kỳ thi dùng fixtures chưa được tính là đạt tích hợp thật.
+Sau khi merge `dev`, backend có Auth, Questions, CRUD/publish/join của Exams
+và xác thực namespace. Các route tạo/lưu/nộp bài làm, lấy kết quả và handler
+realtime tương ứng chưa được mount. Luồng kỳ thi dùng fixtures chưa được
+tính là đạt tích hợp thật.
 Cũng cần kiểm tra Chrome/Firefox/Safari, thiết bị cảm ứng và trình đọc màn
 hình thực tế trước khi chốt QA toàn hệ thống.

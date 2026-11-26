@@ -173,6 +173,8 @@ function ExamWorkspace({
       session.fatalError === null &&
       !session.submitting,
     session.report,
+    session.connected && session.browserOnline,
+    session.disconnection,
   );
   const submitDisabled =
     disabled || !session.connected || !session.browserOnline;

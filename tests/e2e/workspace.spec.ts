@@ -1,14 +1,19 @@
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 // Only the real-backend suite loads server dependencies, to clean up its own user.
-const serverRequire = createRequire(
-  new URL('../../../server/package.json', import.meta.url),
-);
-serverRequire('dotenv').config({
-  path: fileURLToPath(new URL('../../../../.env', import.meta.url)),
+let serverRequire: ReturnType<typeof createRequire>;
+test.beforeAll(({ browserName }, testInfo) => {
+  const configFile = testInfo.config.configFile;
+  if (!configFile)
+    throw new Error(`Missing Playwright config path for ${browserName}`);
+  const repositoryRoot = dirname(configFile);
+  serverRequire = createRequire(
+    join(repositoryRoot, 'apps/server/package.json'),
+  );
+  serverRequire('dotenv').config({ path: join(repositoryRoot, '.env') });
 });
 test('client reaches the API through the development proxy', async ({
   page,

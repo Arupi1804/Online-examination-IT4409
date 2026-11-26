@@ -8,6 +8,7 @@ import {
   type Submission,
   type ExamConnection,
   type ProctorEvent,
+  type ExamDisconnection,
 } from './exam-model';
 import { examService } from './exam-service';
 import {
@@ -54,6 +55,9 @@ export function useExamSession(loaded: LoadedAttempt, userId: string) {
   const clockRef = useRef(clock);
   const [connected, setConnected] = useState(false);
   const connectedRef = useRef(false);
+  const [disconnection, setDisconnection] = useState<ExamDisconnection | null>(
+    null,
+  );
   const [browserOnline, setBrowserOnline] = useState(
     navigator.onLine !== false,
   );
@@ -173,6 +177,7 @@ export function useExamSession(loaded: LoadedAttempt, userId: string) {
         },
         onClock: syncClock,
         onSubmitted: finish,
+        onDisconnect: recordDisconnect,
         onConnection(value) {
           if (active) {
             const ready = value;
@@ -191,7 +196,28 @@ export function useExamSession(loaded: LoadedAttempt, userId: string) {
         },
       });
     }
+    function recordDisconnect() {
+      if (
+        !active ||
+        !connectedRef.current ||
+        terminal.current ||
+        fatal.current ||
+        submittingRef.current ||
+        closedRef.current ||
+        remainingSeconds(clockRef.current) === 0
+      )
+        return;
+      // Socket loss and the browser's offline event can describe the same
+      // outage. Re-arm only after a fresh rejoin sets connectedRef to true.
+      connectedRef.current = false;
+      const clientAt = new Date().toISOString();
+      setDisconnection((previous) => ({
+        sequence: (previous?.sequence ?? 0) + 1,
+        clientAt,
+      }));
+    }
     function offline() {
+      recordDisconnect();
       setBrowserOnline(false);
       connectedRef.current = false;
       setConnected(false);
@@ -279,6 +305,7 @@ export function useExamSession(loaded: LoadedAttempt, userId: string) {
     ...answers,
     clock,
     connected,
+    disconnection,
     browserOnline,
     draftStored,
     connectionError,
