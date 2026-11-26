@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getExamErrorMessage } from './exam-errors';
@@ -28,10 +28,15 @@ export function SubmitExamDialog({
   onRetry,
 }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = dialog.current;
+    const trigger = document.activeElement;
     element?.showModal();
-    return () => element?.close();
+    return () => {
+      element?.close();
+      if (trigger instanceof HTMLElement && trigger.isConnected)
+        trigger.focus({ preventScroll: true });
+    };
   }, []);
   return (
     <dialog
@@ -42,7 +47,7 @@ export function SubmitExamDialog({
         event.preventDefault();
         if (!submitting) onClose();
       }}
-      className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border bg-card p-6 text-foreground shadow-xl backdrop:bg-foreground/40 sm:p-8"
+      className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto overscroll-contain rounded-2xl border bg-card p-6 text-foreground shadow-xl backdrop:bg-foreground/40 sm:p-8"
     >
       <h2 id="submit-title" className="text-2xl font-semibold">
         Nộp bài thi?
@@ -54,13 +59,13 @@ export function SubmitExamDialog({
         Sau khi máy chủ xác nhận nộp bài, bạn sẽ không thể thay đổi đáp án.
       </p>
       <dl className="mt-5 space-y-3 rounded-xl bg-background p-4 text-base">
-        <div className="flex justify-between gap-4">
+        <div className="flex flex-wrap justify-between gap-4">
           <dt>Đã trả lời</dt>
           <dd className="font-semibold">
             {answered} / {total} câu
           </dd>
         </div>
-        <div className="flex justify-between gap-4">
+        <div className="flex flex-wrap justify-between gap-4">
           <dt>Chưa trả lời</dt>
           <dd
             className={
@@ -70,7 +75,7 @@ export function SubmitExamDialog({
             {total - answered} câu
           </dd>
         </div>
-        <div className="flex justify-between gap-4">
+        <div className="flex flex-wrap justify-between gap-4">
           <dt>Đã đánh dấu</dt>
           <dd className="font-semibold">{flagged} câu</dd>
         </div>
@@ -92,11 +97,17 @@ export function SubmitExamDialog({
           {getExamErrorMessage(error)}
         </p>
       )}
-      <div className="mt-6 flex flex-wrap justify-end gap-3">
-        <Button variant="outline" disabled={submitting} onClick={onClose}>
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+        <Button
+          variant="outline"
+          className="h-auto min-h-11 whitespace-normal py-3"
+          disabled={submitting}
+          onClick={onClose}
+        >
           Tiếp tục làm bài
         </Button>
         <Button
+          className="h-auto min-h-11 whitespace-normal py-3"
           disabled={submitting || disabled || failed > 0}
           onClick={onConfirm}
         >

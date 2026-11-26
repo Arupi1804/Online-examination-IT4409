@@ -121,13 +121,28 @@ chuyển sang kết quả và xóa hàng đợi cục bộ, không gửi lại �
 Đáp án đã được server lưu không bị lựa chọn cũ từ cache ghi đè trừ khi
 câu đó có thay đổi chưa được xác nhận trên chính phiên trình duyệt này.
 
-## Chuyển trang và toàn màn hình
+## Giám sát bài thi
 
-Trong lúc bài còn được phép làm, frontend quan sát `visibilitychange` và
-`fullscreenchange`, gửi `TAB_BLUR` hoặc `FULLSCREEN_EXIT` qua
-`proctor:violation`. Payload chỉ có `attemptId`, `type`, `clientAt`; server
-quyết định danh tính, thời điểm ghi log và chính sách xử lý. Không dùng
-window blur làm bằng chứng chuyển tab; mất mạng không tự tạo vi phạm.
+Frontend dùng đủ bốn loại từ `ViolationType` trong `@online-exam/shared`:
+`TAB_BLUR`, `FULLSCREEN_EXIT`, `COPY_PASTE` và `DISCONNECT`. Payload gửi qua
+`proctor:violation` chỉ có `attemptId`, `type`, `clientAt`; server quyết định
+danh tính, thời điểm ghi log và chính sách xử lý. Không dùng window blur
+làm bằng chứng chuyển tab.
+
+`COPY_PASTE` quan sát sự kiện copy/cut khi toàn bộ vùng chọn nằm trong khung
+câu hỏi và paste khi đích thao tác nằm trong khung đó. Thao tác ngoài vùng
+câu hỏi không tạo log. Frontend chỉ kiểm tra ranh giới vùng chọn/đích sự
+kiện, không đọc hoặc gửi nội dung clipboard, không chặn thao tác mặc định.
+
+`DISCONNECT` được ghi nhận sau khi đã có kết nối/rejoin hợp lệ, khi browser
+báo offline, socket bị ngắt hoặc heartbeat không nhận được ACK. Các tín hiệu
+của cùng một đợt gián đoạn được gộp thành một sự kiện. Lần vào phòng đầu,
+nút kết nối lại, đăng xuất và dọn socket không tự tạo log. Sự kiện chưa từng
+gửi được giữ trong bộ nhớ, chỉ gửi một lần sau khi rejoin xác nhận bài còn
+IN_PROGRESS và còn thời gian. Bài đã chốt hoặc hết giờ sẽ bỏ sự kiện đang
+chờ, không gửi log trễ. Log đã gửi nhưng chưa rõ ACK không được phát lại.
+Nhật ký cục bộ mất khi reload/đóng trang; trạng thái online/offline chính
+thức vẫn do #3 xác định từ heartbeat với ngưỡng 30 giây theo contract Redis.
 
 Nút **Vào toàn màn hình** dùng Fullscreen API từ thao tác trực tiếp của người
 dùng. Không ghi thoát fullscreen trước khi thực sự vào fullscreen; trình
@@ -154,8 +169,22 @@ lỗi cấu hình adapter. Bộ smoke test tại root dùng Auth/backend thật,
 bằng `pnpm.cmd test:e2e` khi PostgreSQL và Redis đã sẵn sàng.
 Kiểm tra ACK, sự kiện, reconnect, timeout, thứ tự autosave, khôi phục bài,
 nộp bài sau khi lưu xong, khóa khi hết giờ, mất mạng/reload, heartbeat,
-chuyển tab/fullscreen, bảo vệ kết quả chưa công bố và dọn kết nối.
+đủ bốn loại sự kiện giám sát, bảo vệ kết quả chưa công bố và dọn kết nối.
 Đây là kiểm chứng frontend với backend
 giả lập, chưa thay thế kiểm tra tích hợp backend thật. Cần để trống cổng
 5174 và 5190 khi chạy E2E.
 Để dùng Edge đã cài, đặt `$env:PLAYWRIGHT_CHANNEL = "msedge"` trước khi chạy.
+
+## Responsive và kiểm thử luồng thí sinh
+
+Giao diện hỗ trợ màn hình từ 320px, nội dung câu hỏi/đáp án dài và hộp thoại
+cuộn khi màn hình thấp. Danh sách câu hỏi có nút đi nhanh trên mobile/tablet;
+liên kết **Đến nội dung chính** xuất hiện khi dùng Tab. Chọn câu đưa focus
+về tiêu đề, hộp thoại dùng modal của trình duyệt và Escape để ở lại bài.
+
+Test case, dữ liệu, bước chạy và giới hạn tích hợp được mô tả tại
+[tests/README.md](tests/README.md). Suite `student-qa.spec.ts` kiểm tra luồng
+đăng nhập → phòng chờ → làm bài → kết quả → đăng xuất ở 320/375/768/1280px,
+bàn phím, chữ 200%, reduced motion và hộp thoại khi xoay ngang. Suite này dùng
+REST/Socket.IO fixtures. Suite E2E tại root có thêm đăng ký/đăng nhập,
+khôi phục cookie session và đăng xuất bằng PostgreSQL/Redis/backend thật.

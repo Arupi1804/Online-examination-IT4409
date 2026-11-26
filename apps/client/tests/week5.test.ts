@@ -280,6 +280,35 @@ test('visibility and fullscreen observers report transitions once, skip initial 
   assert.equal(events.length, 2);
 });
 
+test('clipboard observation is scoped, leaves default behavior intact and removes all listeners', () => {
+  const target = Object.assign(new EventTarget(), {
+    visibilityState: 'visible' as DocumentVisibilityState,
+    fullscreenElement: null,
+  });
+  const events: string[] = [];
+  let insideExam = false;
+  const stop = observeExamDocument(
+    target,
+    (event) => events.push(event),
+    () => undefined,
+    () => insideExam,
+  );
+  for (const type of ['copy', 'cut', 'paste'])
+    target.dispatchEvent(new Event(type));
+  assert.deepEqual(events, []);
+  insideExam = true;
+  for (const type of ['copy', 'cut', 'paste']) {
+    const event = new Event(type, { cancelable: true });
+    target.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  assert.deepEqual(events, ['COPY_PASTE', 'COPY_PASTE', 'COPY_PASTE']);
+  stop();
+  for (const type of ['copy', 'cut', 'paste'])
+    target.dispatchEvent(new Event(type));
+  assert.equal(events.length, 3);
+});
+
 test('result schema accepts hidden details and server partial credit, without fabricating missing grades', () => {
   const paper = { ...buildPaper(), status: 'SUBMITTED' as const };
   const hidden = buildResult(paper, new Map());

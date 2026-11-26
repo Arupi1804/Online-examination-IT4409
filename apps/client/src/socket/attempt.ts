@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { z } from 'zod';
+import { ViolationType } from '@online-exam/shared';
 import { examSocketUrl } from './namespace.ts';
 import {
   examClockSchema,
@@ -181,6 +182,7 @@ export function connectAttempt(paper: AttemptPaper, callbacks: ExamCallbacks) {
           if (!active || generation !== requestGeneration) return;
           heartbeatPending = false;
           if (error) {
+            callbacks.onDisconnect?.();
             callbacks.onConnection(false);
             callbacks.onError(new ExamError('REALTIME_TIMEOUT'));
             recover(requestGeneration);
@@ -263,6 +265,13 @@ export function connectAttempt(paper: AttemptPaper, callbacks: ExamCallbacks) {
     }
   });
   socket.on('disconnect', () => {
+    if (
+      active &&
+      joined &&
+      lastClock?.status === 'RUNNING' &&
+      remainingSeconds(lastClock) > 0
+    )
+      callbacks.onDisconnect?.();
     generation += 1;
     joined = false;
     recovering = false;
@@ -293,7 +302,7 @@ export function connectAttempt(paper: AttemptPaper, callbacks: ExamCallbacks) {
         remainingSeconds(lastClock) === 0
       )
         return Promise.reject(new ExamError('REALTIME_DISCONNECTED'));
-      z.enum(['TAB_BLUR', 'FULLSCREEN_EXIT']).parse(type);
+      ViolationType.parse(type);
       isoTime.parse(clientAt);
       const requestGeneration = generation;
       return new Promise((resolve, reject) => {

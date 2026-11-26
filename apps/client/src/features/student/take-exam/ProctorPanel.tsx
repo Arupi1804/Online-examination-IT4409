@@ -1,6 +1,14 @@
 import { Maximize, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { useProctoring } from './useProctoring';
+import type { ProctorEvent } from './exam-model';
+
+const messages: Record<ProctorEvent, string> = {
+  TAB_BLUR: 'Bạn vừa chuyển khỏi trang thi.',
+  FULLSCREEN_EXIT: 'Bạn vừa thoát toàn màn hình.',
+  COPY_PASTE: 'Bạn vừa thực hiện sao chép, cắt hoặc dán trong vùng câu hỏi.',
+  DISCONNECT: 'Kết nối với phòng thi vừa bị gián đoạn.',
+};
 
 export function ProctorPanel({
   proctor,
@@ -20,10 +28,11 @@ export function ProctorPanel({
       </h2>
       <p className="text-muted-foreground">
         Giữ trang thi mở và làm theo hướng dẫn của giáo viên. Chuyển khỏi trang
-        thi hoặc thoát toàn màn hình sẽ được ghi nhận.
+        thi, thoát toàn màn hình, sao chép/cắt/dán trong vùng câu hỏi và gián
+        đoạn kết nối sẽ được ghi nhận.
       </p>
       <Button
-        className="w-full"
+        className="h-auto min-h-11 w-full whitespace-normal py-2.5"
         variant="outline"
         onClick={() => {
           void proctor.enterFullscreen();
@@ -44,11 +53,14 @@ export function ProctorPanel({
           role="status"
         >
           <p>
-            {proctor.lastEvent === 'FULLSCREEN_EXIT'
-              ? 'Bạn vừa thoát toàn màn hình.'
-              : 'Bạn vừa chuyển khỏi trang thi.'}{' '}
-            Hãy tiếp tục tập trung làm bài.
+            {proctor.lastEvent && messages[proctor.lastEvent]} Hãy tiếp tục tập
+            trung làm bài.
           </p>
+          {proctor.pendingDisconnect && (
+            <p className="mt-2">
+              Sự kiện mất kết nối đang chờ xác nhận lại bài làm trước khi gửi.
+            </p>
+          )}
           <p className="mt-2">
             Trong lần mở trang này: {proctor.observed} sự kiện,{' '}
             {proctor.confirmed} đã được máy chủ xác nhận.

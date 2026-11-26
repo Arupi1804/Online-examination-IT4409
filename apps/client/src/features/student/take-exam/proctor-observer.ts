@@ -14,6 +14,7 @@ export function observeExamDocument(
   target: ObservedDocument,
   onEvent: (type: ProctorEvent) => void,
   onFullscreen: (active: boolean) => void,
+  acceptsClipboard: (event: Event) => boolean = () => false,
 ) {
   let visibility = target.visibilityState;
   let fullscreen = !!target.fullscreenElement;
@@ -28,10 +29,17 @@ export function observeExamDocument(
     fullscreen = next;
     onFullscreen(next);
   }
+  function clipboardChanged(event: Event) {
+    if (acceptsClipboard(event)) onEvent('COPY_PASTE');
+  }
   target.addEventListener('visibilitychange', visibilityChanged);
   target.addEventListener('fullscreenchange', fullscreenChanged);
+  for (const event of ['copy', 'cut', 'paste'])
+    target.addEventListener(event, clipboardChanged);
   return () => {
     target.removeEventListener('visibilitychange', visibilityChanged);
     target.removeEventListener('fullscreenchange', fullscreenChanged);
+    for (const event of ['copy', 'cut', 'paste'])
+      target.removeEventListener(event, clipboardChanged);
   };
 }

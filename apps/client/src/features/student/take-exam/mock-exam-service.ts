@@ -1,4 +1,5 @@
 import { ApiError } from '../../../services/api.ts';
+import { ViolationType } from '@online-exam/shared';
 import {
   attemptPaperSchema,
   validSelection,
@@ -302,7 +303,9 @@ export function createMockExamService(): ExamService {
           active = false;
           clearInterval(timer);
         },
-        async report(_type, _clientAt) {
+        async report(type, clientAt) {
+          ViolationType.parse(type);
+          isoTime.parse(clientAt);
           await wait();
           if (
             !active ||

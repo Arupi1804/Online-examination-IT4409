@@ -1,5 +1,20 @@
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+
+// Only the real-backend suite loads server dependencies, to clean up its own user.
+let serverRequire: ReturnType<typeof createRequire>;
+test.beforeAll(({ browserName }, testInfo) => {
+  const configFile = testInfo.config.configFile;
+  if (!configFile)
+    throw new Error(`Missing Playwright config path for ${browserName}`);
+  const repositoryRoot = dirname(configFile);
+  serverRequire = createRequire(
+    join(repositoryRoot, 'apps/server/package.json'),
+  );
+  serverRequire('dotenv').config({ path: join(repositoryRoot, '.env') });
+});
 test('client reaches the API through the development proxy', async ({
   page,
   request,
@@ -63,4 +78,53 @@ test('browser login from the alternate loopback origin stays forbidden', async (
   });
   expect(response.status).toBe(403);
   expect(response.body.error.code).toBe('FORBIDDEN');
+});
+
+test('student registers, restores its cookie session and logs out through the real API', async ({
+  page,
+  baseURL,
+}) => {
+  const { PrismaClient } = serverRequire('@prisma/client');
+  const prisma = new PrismaClient();
+  const email = `student-e2e-${randomUUID()}@example.test`;
+  const password = `E2e@${randomUUID()}`;
+  const name = 'Thí sinh kiểm thử hệ thống';
+  try {
+    await page.goto('/login?mode=register');
+    await page.getByLabel('Họ và tên', { exact: true }).fill(name);
+    await page.getByLabel('Email', { exact: true }).fill(email);
+    await page.getByLabel('Mật khẩu', { exact: true }).fill(password);
+    await page.getByLabel('Xác nhận mật khẩu', { exact: true }).fill(password);
+    await page
+      .getByRole('button', { name: 'Tạo tài khoản', exact: true })
+      .click();
+    await expect(page.getByRole('status')).toContainText(
+      'Tạo tài khoản thành công',
+    );
+    await page.getByLabel('Mật khẩu', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click();
+    await expect(page).toHaveURL('/join');
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(
+      page.getByLabel('Mã phòng thi', { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click();
+    await expect(page).toHaveURL('/login');
+    await page.goto('/join');
+    await expect(page).toHaveURL('/login');
+  } finally {
+    // Revoke any session left by a failed assertion, then delete only this UUID email.
+    await page.request
+      .post('/api/v1/auth/logout', {
+        headers: { Origin: baseURL! },
+      })
+      .catch(() => undefined);
+    try {
+      await prisma.user.deleteMany({ where: { email } });
+    } finally {
+      await prisma.$disconnect();
+    }
+  }
 });

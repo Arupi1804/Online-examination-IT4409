@@ -61,6 +61,12 @@ export default function StudentLayout() {
   }
   return (
     <div className="min-h-svh bg-background">
+      <a
+        href="#student-main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-3 focus:text-primary-foreground focus:outline-2 focus:outline-offset-2 focus:outline-ring"
+      >
+        Đến nội dung chính
+      </a>
       {isAuthMock && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-800">
           Bản xem thử · Phiên đăng nhập mô phỏng trên trình duyệt
@@ -71,7 +77,7 @@ export default function StudentLayout() {
           <Link
             to="/join"
             aria-label="Online Examination"
-            className="flex items-center gap-2.5 rounded-md font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            className="flex shrink-0 items-center gap-2.5 rounded-md font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             <GraduationCap className="size-7 text-primary" aria-hidden="true" />
             <span className="hidden sm:inline">Online Examination</span>
@@ -86,6 +92,7 @@ export default function StudentLayout() {
             <Button
               variant="outline"
               size="sm"
+              className="h-11 min-w-11"
               onClick={handleLogout}
               disabled={loggingOut}
               aria-label="Đăng xuất"
@@ -106,7 +113,11 @@ export default function StudentLayout() {
           {logoutError}
         </p>
       )}
-      <main className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
+      <main
+        id="student-main"
+        tabIndex={-1}
+        className="mx-auto max-w-7xl px-5 py-8 outline-none sm:px-8"
+      >
         <Outlet context={{ beforeLogout }} />
       </main>
     </div>

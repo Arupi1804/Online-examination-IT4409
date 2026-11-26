@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ViolationType } from '@online-exam/shared';
 import type { AttemptResult } from '../results/result-model.ts';
 
 const id = z.string().uuid();
@@ -108,7 +109,11 @@ export const recoveredAttemptSchema = z
       ctx.addIssue({ code: 'custom', message: 'Invalid recovered state' });
   });
 export type RecoveredAttempt = z.infer<typeof recoveredAttemptSchema>;
-export type ProctorEvent = 'TAB_BLUR' | 'FULLSCREEN_EXIT';
+export type ProctorEvent = z.infer<typeof ViolationType>;
+export interface ExamDisconnection {
+  sequence: number;
+  clientAt: string;
+}
 export interface ExamConnection {
   disconnect(): void;
   report(type: ProctorEvent, clientAt: string): Promise<void>;
@@ -130,6 +135,7 @@ export interface ExamCallbacks {
   onClock(clock: ClockSample): void;
   onSubmitted(submission: Submission): void;
   onConnection(connected: boolean): void;
+  onDisconnect?(): void;
   onError(error: unknown): void;
 }
 export interface ExamService {
