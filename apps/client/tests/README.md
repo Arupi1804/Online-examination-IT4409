@@ -77,7 +77,8 @@ bài thi và kết quả cho từng kích thước.
 
 Nguồn: [student-qa.spec.ts](e2e/student-qa.spec.ts).
 
-1. Tải lại trang nhập mã, dùng Tab → Enter ở liên kết đến nội dung chính.
+1. Tải lại trang nhập mã với API kiểm tra phiên trả lời chậm. Chờ form nhập
+   mã hiển thị rồi dùng Tab → Enter ở liên kết đến nội dung chính.
 2. Nhập mã và gửi bằng Enter; sau khi bắt đầu, chọn radio bằng Space.
 3. Mở hộp thoại nộp bằng Enter; đi tới các nút bằng Tab/Shift+Tab, thử đưa
    focus về nút phía sau hộp thoại; nhấn Escape.

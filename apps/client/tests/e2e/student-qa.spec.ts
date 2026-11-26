@@ -22,6 +22,7 @@ let signedIn: boolean;
 let status: 'SCHEDULED' | 'RUNNING';
 let saveFails: boolean;
 let submissions: number;
+let sessionDelayMs: number;
 const longText = 'Nộidungkiểmthử'.repeat(18);
 const longName = 'Thísinh'.repeat(12);
 
@@ -91,9 +92,12 @@ test.beforeEach(async ({ page }) => {
   status = 'SCHEDULED';
   saveFails = false;
   submissions = 0;
+  sessionDelayMs = 0;
   const user = { ...profile, name: longName };
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/me') && sessionDelayMs > 0)
+      await new Promise((resolve) => setTimeout(resolve, sessionDelayMs));
     if (path.endsWith('/auth/me') && !signedIn) {
       await route.fulfill({
         status: 401,
@@ -335,14 +339,18 @@ test('QA-KEYBOARD: skip navigation, answer controls and safe modal focus work wi
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await login(page);
+  // Exercise reload while AuthProvider is still waiting for /auth/me.
+  sessionDelayMs = 1000;
   await page.reload();
+  const code = page.getByLabel('Mã phòng thi', { exact: true });
+  // reload's load event does not mean the asynchronous session check is done.
+  await expect(code).toBeVisible();
   await page.keyboard.press('Tab');
   await expect(
     page.getByRole('link', { name: 'Đến nội dung chính' }),
   ).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('main')).toBeFocused();
-  const code = page.getByLabel('Mã phòng thi', { exact: true });
   await code.focus();
   await page.keyboard.type('K7M2QX');
   await page.keyboard.press('Enter');
