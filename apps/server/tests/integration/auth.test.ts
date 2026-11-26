@@ -1,5 +1,9 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import {
   afterAll,
   beforeAll,
@@ -9,7 +13,7 @@ import {
   it,
   vi,
 } from 'vitest';
-import { Router } from 'express';
+import { Router, type NextFunction } from 'express';
 import request from 'supertest';
 import { createClient } from 'redis';
 import { Server } from 'socket.io';
@@ -97,12 +101,13 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
     });
     server.on('request', app);
     io = new Server(server);
-    io.engine.use((req, res, next) =>
-      sessions.socketSessionMiddleware(
-        req as Parameters<typeof sessions.socketSessionMiddleware>[0],
-        res as Parameters<typeof sessions.socketSessionMiddleware>[1],
-        next,
-      ),
+    io.engine.use(
+      (req: IncomingMessage, res: ServerResponse, next: NextFunction) =>
+        sessions.socketSessionMiddleware(
+          req as Parameters<typeof sessions.socketSessionMiddleware>[0],
+          res as Parameters<typeof sessions.socketSessionMiddleware>[1],
+          next,
+        ),
     );
     const namespace = io.of('/exam');
     sessions.attachSocketAuthentication(namespace);
@@ -210,8 +215,12 @@ describe.skipIf(!redisUrl)('Auth HTTP + real Redis + Socket.IO', () => {
       .send({ email: 'student@example.test', password })
       .expect(200);
     expect(cookie(loggedIn)).not.toBe(cookie(first));
-    expect(loggedIn.headers['set-cookie'].join(';')).toContain('HttpOnly');
-    expect(loggedIn.headers['set-cookie'].join(';')).toContain('SameSite=Lax');
+    const responseCookies = loggedIn.headers['set-cookie'];
+    const serializedCookies = Array.isArray(responseCookies)
+      ? responseCookies.join(';')
+      : (responseCookies ?? '');
+    expect(serializedCookies).toContain('HttpOnly');
+    expect(serializedCookies).toContain('SameSite=Lax');
     expect(Object.keys(loggedIn.body)).toEqual(['data']);
     expect(Object.keys(loggedIn.body.data).sort()).toEqual([
       'email',

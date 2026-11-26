@@ -53,7 +53,7 @@ Lỗi nghiệp vụ dùng `HttpError` tại `src/core/errors/http-error.ts`, đi
 
 ## Bàn giao cho TV3
 
-Chỉ tạo một Socket.IO Server trên HTTP server chung. Bootstrap của nhánh Auth đã tạo namespace `/exam` và gắn Auth; TV3 bổ sung handler vào namespace này khi tích hợp, không tạo Server thứ hai hoặc đăng ký event vào `/`.
+Chỉ tạo một Socket.IO Server trên HTTP server chung. Bootstrap gắn Auth và handler realtime vào cùng namespace `/exam`; không tạo Server thứ hai hoặc đăng ký event vào `/`.
 
 - `sessions.sessionStore`: cùng instance Redis store với HTTP.
 - `sessions.socketSessionMiddleware`: đọc cookie đã ký/session ở Engine.IO handshake, không ghi cookie/TTL. Khác HTTP middleware ở hành vi gia hạn; cùng secret/store/identity.

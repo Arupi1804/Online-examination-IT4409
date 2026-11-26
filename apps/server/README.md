@@ -1,8 +1,38 @@
-# Server
+# Backend Realtime
 
+`src/index.ts` tạo một HTTP server và một Socket.IO server. Auth xác thực cookie/session trên namespace `/exam`; module realtime gắn handler và worker vào namespace đó. Auth và realtime dùng chung `PrismaClient` và Redis client trong bootstrap.
+
+- `handlers/gateway.ts`: ACK, room và phát sự kiện Socket.IO; Auth quản lý handshake và thu hồi session.
+- `jobs/worker.ts`: đồng bộ timer, quét offline và chốt bài hết giờ.
+- `services/`: nghiệp vụ Realtime, truy cập PostgreSQL qua Prisma và Redis.
+- `errors.ts`, `index.ts`: lỗi dùng chung và điểm gắn module vào server.
+
+```ts
+import { WS_NAMESPACE } from '@online-exam/shared';
+import { mountRealtime } from './modules/realtime/index.js';
+
+const realtime = await mountRealtime({
+  namespace: io.of(WS_NAMESPACE),
+  sessions,
+  prisma,
+  redis,
+  environment: 'dev',
+});
+
+// Sau khi REST nộp bài hoặc lưu đáp án thành công:
+realtime.gateway.emitSubmitted(submitted); // chỉ khi trạng thái vừa chuyển sang submitted
+await realtime.gateway.emitStudentUpdate(attemptId);
+
+// Trong shutdown handler:
+realtime.close();
+```
+
+Session lưu `userId` và `role` ở cấp cao nhất. Auth quản lý `oe:<env>:v1:sess:<sid>` và `oe:<env>:v1:auth:user:<userId>:active_session` như [Redis Key Schema](../../docs/redis-key-schema.md). Realtime dùng cùng Prisma và Redis client của Auth. Repository thao tác dữ liệu bằng Prisma; `src/core/db/clock.ts` đọc đồng hồ PostgreSQL và `src/core/db/locks.ts` giữ khóa hàng khi chốt bài, đều qua Prisma transaction. `mountRealtime` khởi động worker sau khi kết nối PostgreSQL/Redis sẵn sàng. Worker chốt bài sau `endTime + 5 giây`; nếu process dừng, lần khởi động kế tiếp sẽ quét lại DB.
+
+Lệnh ở workspace root: `pnpm install`, `pnpm check`, `pnpm test`, `pnpm build`. Chi tiết event và ACK ở [WebSocket contract](../../docs/ws-events.md).
 Backend Express + Socket.IO. Module Realtime tuân thủ `docs/ws-events.md`; không tạo Socket.IO server độc lập ngoài gateway chung.
 
-Root `pnpm dev` khởi động ứng dụng. `src/index.ts` là entrypoint; `src/app.ts` là HTTP app dùng cho test. Server cần PostgreSQL/Redis và `SESSION_SECRET` tối thiểu 32 ký tự. `/api/v1/health` chỉ kiểm tra HTTP liveness. Namespace `/exam` xác thực bằng cùng Redis session với HTTP; chưa có handler nghiệp vụ thi.
+Root `pnpm dev` khởi động ứng dụng. `src/index.ts` là entrypoint; `src/app.ts` là HTTP app dùng cho test. Server cần PostgreSQL/Redis và `SESSION_SECRET` tối thiểu 32 ký tự. `/api/v1/health` chỉ kiểm tra HTTP liveness. Namespace `/exam` xác thực bằng cùng Redis session với HTTP và có handler nghiệp vụ realtime.
 
 Auth theo `core-openapi`: `/api/v1/auth/register`, `/login`, `/me`, `/logout`. Register/login/me trả `{data: User}`; đăng ký tạo STUDENT với password 8–72 ký tự, email trùng trả `EMAIL_TAKEN`. Không có bước lấy CSRF token. Xem [Auth contract](../../docs/auth-contract.md) về cookie/session, kiểm tra nguồn request, middleware cho TV2/TV3 và integration tests.
 

@@ -4,7 +4,6 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
 import { Router, type NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
@@ -13,16 +12,18 @@ import { Server } from 'socket.io';
 import { z } from 'zod';
 import { WS_NAMESPACE } from '@online-exam/shared';
 import { createApp } from './app.js';
+import { findWorkspaceEnv } from './core/config/workspace-env.js';
 import {
   AuthSessions,
   AuthSessionStore,
   createAuthRouter,
   PrismaAuthRepository,
 } from './modules/auth/index.js';
+import { mountRealtime } from './modules/realtime/index.js';
 import { createQuestionsRouter } from './modules/questions/controllers/questions.controller.js';
 import { createExamsRouter } from './modules/exams/controllers/exams.controller.js';
 
-config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
+config({ path: findWorkspaceEnv(import.meta.url) ?? '.env' });
 const env = z
   .object({
     SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -60,10 +61,12 @@ const redis = createClient({
 });
 redis.on('error', () => console.error('Redis connection unavailable'));
 let io: Server | undefined;
+let realtime: Awaited<ReturnType<typeof mountRealtime>> | undefined;
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  realtime?.close();
   if (io) await new Promise<void>((resolve) => io!.close(() => resolve()));
   await prisma.$disconnect();
   if (redis.isOpen) await redis.quit();
@@ -105,6 +108,8 @@ try {
   );
   io = new Server(server, {
     cors: { origin: settings.CLIENT_ORIGIN, credentials: true },
+    maxHttpBufferSize: 16_384,
+    connectionStateRecovery: { skipMiddlewares: false },
   });
   io.engine.use(
     (req: IncomingMessage, res: ServerResponse, next: NextFunction) => {
@@ -119,7 +124,13 @@ try {
       );
     },
   );
-  sessions.attachSocketAuthentication(io.of(WS_NAMESPACE));
+  realtime = await mountRealtime({
+    namespace: io.of(WS_NAMESPACE),
+    sessions,
+    prisma,
+    redis,
+    environment: settings.APP_ENV,
+  });
   server.on('error', () => {
     console.error('HTTP server could not start');
     void shutdown().finally(() => {
@@ -135,7 +146,7 @@ try {
     });
 } catch {
   console.error(
-    'Auth bootstrap failed; check PostgreSQL, Redis and server configuration',
+    'Server bootstrap failed; check PostgreSQL, Redis and server configuration',
   );
   await shutdown();
   process.exitCode = 1;
