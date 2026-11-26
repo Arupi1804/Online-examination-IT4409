@@ -52,11 +52,16 @@ export function createRealtimeGateway(options: GatewayOptions) {
   const lastSyncedDeadline = new Map<string, number>();
   options.sessions.attachSocketAuthentication(namespace);
 
-  // Không phát snapshot worker cũ sau khi đã phát thời hạn gia hạn mới.
-  function emitTimerSync(state: ExamClock): void {
+  // Kiểm tra deadline trước khi phát bất kỳ sự kiện đồng hồ nào.
+  function acceptDeadline(state: ExamClock): boolean {
     const deadline = state.endTime ? Date.parse(state.endTime) : 0;
-    if (deadline < (lastSyncedDeadline.get(state.examId) ?? 0)) return;
+    if (deadline < (lastSyncedDeadline.get(state.examId) ?? 0)) return false;
     lastSyncedDeadline.set(state.examId, deadline);
+    return true;
+  }
+
+  function emitTimerSync(state: ExamClock): void {
+    if (!acceptDeadline(state)) return;
     namespace.to(`exam:${state.examId}`).emit(serverEvents.timerSync, state);
   }
 
@@ -138,10 +143,11 @@ export function createRealtimeGateway(options: GatewayOptions) {
     // Event gia hạn tương tự start nhưng thay end_time
     handle(clientEvents.extend, async (payload) => {
       const clock = await service.extend(payload, principal);
-      namespace
-        .to(`exam:${clock.examId}`)
-        .emit(serverEvents.examExtended, clock);
-      emitTimerSync(clock);
+      if (acceptDeadline(clock)) {
+        const room = namespace.to(`exam:${clock.examId}`);
+        room.emit(serverEvents.examExtended, clock);
+        room.emit(serverEvents.timerSync, clock);
+      }
       onScheduleChanged?.(clock.examId);
       return clock;
     });

@@ -172,7 +172,7 @@ async function fixture() {
     sockets.push(socket);
     return socket;
   }
-  return { store, active, calls, gateway, connect, examId, attemptId };
+  return { store, active, calls, gateway, service, connect, examId, attemptId };
 }
 
 // Promise hoàn thành khi socket connect hoặc reject nếu connect_error
@@ -271,4 +271,65 @@ test('timer sync ignores a stale deadline after an extension', async () => {
   f.gateway.emitTimerSync(latest);
   await receivedLatest;
   assert.deepEqual(received, [newer.endTime, latest.endTime]);
+});
+
+test('concurrent extensions broadcast only the newest deadline in event order', async () => {
+  const f = await fixture();
+  const teacher = f.connect('teacher');
+  const student = f.connect('student');
+  await Promise.all([connected(teacher), connected(student)]);
+  await student.emitWithAck('room:join', { examId: f.examId });
+
+  const older = {
+    examId: f.examId,
+    status: 'RUNNING' as const,
+    startTime: '2026-01-01T00:00:00.000Z',
+    endTime: '2026-01-01T01:30:00.000Z',
+    serverTime: '2026-01-01T00:01:00.000Z',
+  };
+  const newer = {
+    ...older,
+    endTime: '2026-01-01T02:00:00.000Z',
+    serverTime: '2026-01-01T00:02:00.000Z',
+  };
+  let firstEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    firstEntered = resolve;
+  });
+  let releaseFirst!: (state: typeof older) => void;
+  const firstResult = new Promise<typeof older>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let requests = 0;
+  f.service.extend = async () => {
+    if (++requests === 1) {
+      firstEntered();
+      return firstResult;
+    }
+    return newer;
+  };
+
+  const events: { event: string; endTime: string }[] = [];
+  for (const event of ['exam:extended', 'timer:sync']) {
+    student.on(event, (state: { endTime: string }) => {
+      events.push({ event, endTime: state.endTime });
+    });
+  }
+
+  const firstAck = teacher.emitWithAck('exam:extend', {
+    examId: f.examId,
+    additionalSec: 1800,
+  });
+  await entered;
+  const secondAck = await teacher.emitWithAck('exam:extend', {
+    examId: f.examId,
+    additionalSec: 1800,
+  });
+  assert.equal(secondAck.ok, true);
+  releaseFirst(older);
+  assert.equal((await firstAck).ok, true);
+  assert.deepEqual(events, [
+    { event: 'exam:extended', endTime: newer.endTime },
+    { event: 'timer:sync', endTime: newer.endTime },
+  ]);
 });
