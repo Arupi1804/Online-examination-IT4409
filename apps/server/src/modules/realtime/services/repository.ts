@@ -25,7 +25,7 @@ import {
 } from '../../../core/db/locks.js';
 import {
   gradeAttempt,
-  type GradedQuestion,
+  loadGradingQuestions,
 } from '../../attempts/services/grading.js';
 import { RealtimeError } from '../errors.js';
 
@@ -382,39 +382,6 @@ export class RealtimeRepository {
     return rows.map(toExam);
   }
 
-  // Đọc điểm, đáp án đúng và lựa chọn của bài làm trong transaction nộp bài
-  private async loadGradingQuestions(
-    tx: Prisma.TransactionClient,
-    attemptId: string,
-    examId: string,
-  ): Promise<GradedQuestion[]> {
-    const questions = await tx.examQuestion.findMany({
-      where: { examId },
-      select: {
-        questionId: true,
-        points: true,
-        question: {
-          select: {
-            options: { where: { isCorrect: true }, select: { id: true } },
-          },
-        },
-        answers: {
-          where: { attemptId },
-          select: { selectedOptions: { select: { optionId: true } } },
-        },
-      },
-    });
-    // Chuẩn hóa dữ liệu Prisma theo đầu vào của gradeAttempt()
-    return questions.map((question) => ({
-      questionId: question.questionId,
-      points: Number(question.points),
-      correctOptionIds: question.question.options.map((option) => option.id),
-      selectedOptionIds: question.answers.flatMap((answer) =>
-        answer.selectedOptions.map((selection) => selection.optionId),
-      ),
-    }));
-  }
-
   // Chấm và chốt một bài làm đã được khóa; trả null nếu bài đã nộp
   private async submitLocked(
     tx: Prisma.TransactionClient,
@@ -424,7 +391,7 @@ export class RealtimeRepository {
     if (attempt.status !== 'IN_PROGRESS') return null;
     // Chỉ gradeAttempt quyết định điểm; phần đọc và ghi vẫn ở cùng transaction
     const { score, maxScore } = gradeAttempt(
-      await this.loadGradingQuestions(tx, attempt.id, attempt.exam_id),
+      await loadGradingQuestions(tx, attempt.id, attempt.exam_id),
     );
     const submittedAt = await databaseNow(tx);
     // Điều kiện IN_PROGRESS bảo đảm chỉ một lần chuyển trạng thái thành công

@@ -44,10 +44,15 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 
 ## Bài làm
 
-- `POST /exams/:id/attempts` là idempotent khi đang có bài IN_PROGRESS: trả lại bài đó với cùng thứ tự xáo trộn (seed lưu ở `attempts.shuffle_seed`). Client gọi lại endpoint này khi tải lại trang.
+- `POST /exams/:id/attempts` là idempotent khi đang có bài IN_PROGRESS: trả lại bài đó (200) với cùng thứ tự xáo trộn (seed lưu ở `attempts.shuffle_seed`). Client gọi lại endpoint này khi tải lại trang.
+- Bắt đầu bài mới (201) chỉ khi kỳ thi RUNNING và chưa quá `endTime`: DRAFT hoặc không tồn tại trả 404 `NOT_FOUND`, SCHEDULED trả 422 `EXAM_NOT_STARTED`, ENDED hoặc quá `endTime` trả 422 `EXAM_ENDED`, đã dùng hết `maxAttempts` trả 409 `ATTEMPT_LIMIT_REACHED`.
+- Bắt đầu khóa dòng `exams` bằng `FOR SHARE` trong cùng transaction với bước tạo bài. Bài làm của thí sinh được đọc bằng một câu truy vấn, nên bài IN_PROGRESS và số lượt đã dùng là cùng một thời điểm. Hai request bắt đầu đồng thời chỉ tạo một bài (unique index một bài IN_PROGRESS mỗi thí sinh); request thua thử lại và trả bài vừa tạo (200).
 - Đề gửi cho thí sinh không có `isCorrect` và `explanation`.
-- Autosave nhận đến `endTime`. Nộp thủ công nhận đến `endTime + 5 giây`, sau đó `SUBMIT_TOO_LATE`; bài chưa nộp được server tự nộp (AUTO_SUBMITTED, TV3).
+- Autosave ghi đè lựa chọn của một câu; mảng rỗng xóa câu trả lời (câu đó không còn tính vào `answeredCount`). UUID không phân biệt hoa thường. Câu không thuộc kỳ thi trả 404 `NOT_FOUND`; lựa chọn không thuộc câu trả 400 `VALIDATION_FAILED` với `details[].field = selectedOptionIds.<index>`; SINGLE/TRUE_FALSE chọn quá một đáp án trả 400 với `field = selectedOptionIds`.
+- Autosave nhận đến `endTime` (sau đó 422 `EXAM_ENDED`). Nộp thủ công nhận đến `endTime + 5 giây`, sau đó `SUBMIT_TOO_LATE`; bài chưa nộp được server tự nộp (AUTO_SUBMITTED, TV3). Thời điểm so sánh là giờ PostgreSQL.
+- Autosave và mọi kiểu nộp (REST, `attempt:force_submit`, worker tự nộp) khóa dòng `attempts` bằng `SELECT … FOR UPDATE` rồi mới kiểm tra IN_PROGRESS, nên không có đáp án nào được ghi sau khi chấm. Bài đã được nộp trước thì autosave hoặc lệnh nộp đang chờ nhận 409 `ATTEMPT_ALREADY_SUBMITTED`.
 - Nộp/chấm idempotent: một bài chỉ chuyển khỏi IN_PROGRESS một lần.
+- Sau khi transaction commit, autosave phát `monitor:student_update` và nộp qua REST phát `attempt:submitted` + `monitor:student_update` (qua gateway của TV3). Lỗi phát WebSocket chỉ ghi log, request vẫn thành công.
 
 ## Chấm điểm
 

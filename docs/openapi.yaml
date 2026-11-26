@@ -521,8 +521,9 @@ paths:
       description: >-
         Role: STUDENT. Nếu thí sinh đang có bài IN_PROGRESS của kỳ thi này thì
         trả lại đúng bài đó (200) với cùng thứ tự xáo trộn — dùng khi tải lại
-        trang. Ngược lại tạo bài mới (201). Đề không bao giờ chứa đáp án đúng
-        hay lời giải.
+        trang. Ngược lại tạo bài mới (201) khi kỳ thi RUNNING và chưa quá
+        `endTime`. Kỳ thi DRAFT hoặc không tồn tại trả 404. Đề không bao giờ
+        chứa đáp án đúng hay lời giải.
       responses:
         '200':
           $ref: '#/components/responses/AttemptPaperOk'
@@ -661,9 +662,11 @@ paths:
       operationId: saveAnswer
       summary: Autosave đáp án một câu (ghi đè)
       description: >-
-        Role: STUDENT (chủ bài làm). Mảng rỗng nghĩa là bỏ chọn. SINGLE và
-        TRUE_FALSE chỉ nhận tối đa một lựa chọn. Sau `endTime` không nhận
-        thêm đáp án.
+        Role: STUDENT (chủ bài làm). Mảng rỗng nghĩa là bỏ chọn (xóa câu trả
+        lời). SINGLE và TRUE_FALSE chỉ nhận tối đa một lựa chọn; lựa chọn
+        không thuộc câu hỏi trả 400 với `details[].field =
+        selectedOptionIds.<index>`. Bài hoặc câu hỏi không thuộc kỳ thi của
+        thí sinh trả 404. Sau `endTime` không nhận thêm đáp án.
       requestBody:
         required: true
         content:
@@ -714,8 +717,9 @@ paths:
       operationId: submitAttempt
       summary: Nộp bài thủ công
       description: >-
-        Role: STUDENT (chủ bài làm). Chấp nhận khi `now <= endTime + 5 giây`.
-        Server chấm điểm ngay khi nộp.
+        Role: STUDENT (chủ bài làm). Chấp nhận khi `now <= endTime + 5 giây`
+        (giờ PostgreSQL). Server chấm điểm ngay khi nộp và trả điểm; bài đã
+        nộp (kể cả tự nộp hoặc bị giáo viên thu) trả 409.
       responses:
         '200':
           description: Đã nộp
