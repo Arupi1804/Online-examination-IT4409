@@ -319,3 +319,105 @@ export async function submitAttempt(
     };
   });
 }
+
+/**
+ * Result of a submitted attempt, for the student who took it or the teacher
+ * who owns the exam. Students get the questions (correct options and
+ * explanations) only once the exam has ENDED, so nobody still taking it can
+ * see them.
+ */
+export async function getAttemptResult(
+  prisma: PrismaClient,
+  viewer: { id: string; role: string },
+  attemptId: string,
+) {
+  const attempt = await prisma.attempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      exam: {
+        include: {
+          questions: {
+            orderBy: { orderIndex: 'asc' },
+            select: {
+              points: true,
+              question: {
+                select: {
+                  id: true,
+                  type: true,
+                  content: true,
+                  explanation: true,
+                  options: {
+                    orderBy: { orderIndex: 'asc' },
+                    select: { id: true, content: true, isCorrect: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      answers: {
+        include: {
+          selectedOptions: {
+            orderBy: { optionId: 'asc' },
+            select: { optionId: true },
+          },
+        },
+      },
+    },
+  });
+  const allowed =
+    attempt &&
+    ((viewer.role === 'STUDENT' && attempt.userId === viewer.id) ||
+      (viewer.role === 'TEACHER' && attempt.exam.ownerId === viewer.id));
+  if (!allowed) throw attemptNotFound();
+  if (attempt.status === 'IN_PROGRESS') {
+    throw new HttpError(
+      409,
+      ERROR_CODES.ATTEMPT_NOT_SUBMITTED,
+      'Attempt is not submitted yet',
+    );
+  }
+
+  const selected = new Map(
+    attempt.answers.map((a) => [
+      a.questionId,
+      a.selectedOptions.map((s) => s.optionId),
+    ]),
+  );
+  const questions = attempt.exam.questions.map(({ points, question }) => ({
+    questionId: question.id,
+    type: question.type,
+    content: question.content,
+    explanation: question.explanation,
+    points: points.toNumber(),
+    selectedOptionIds: selected.get(question.id) ?? [],
+    options: question.options,
+  }));
+  // Same rule as at submit time; questions of a published exam cannot change.
+  const graded = gradeAttempt(
+    questions.map((q) => ({
+      questionId: q.questionId,
+      points: q.points,
+      correctOptionIds: q.options.filter((o) => o.isCorrect).map((o) => o.id),
+      selectedOptionIds: q.selectedOptionIds,
+    })),
+  );
+  const visible = viewer.role === 'TEACHER' || attempt.exam.status === 'ENDED';
+  return {
+    attemptId: attempt.id,
+    examId: attempt.examId,
+    examTitle: attempt.exam.title,
+    status: attempt.status,
+    startedAt: attempt.startedAt,
+    submittedAt: attempt.submittedAt,
+    score: attempt.score?.toNumber() ?? graded.score,
+    maxScore: attempt.maxScore?.toNumber() ?? graded.maxScore,
+    questions: visible
+      ? questions.map((q, i) => ({
+          ...q,
+          earnedPoints: graded.questions[i]!.earnedPoints,
+        }))
+      : null,
+  };
+}

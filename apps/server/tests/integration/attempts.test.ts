@@ -43,7 +43,10 @@ function appAs(
   apiRouter.use(
     createAttemptsRouter(
       prisma,
-      sessions.requireRoles('STUDENT'),
+      {
+        student: sessions.requireRoles('STUDENT'),
+        studentOrTeacher: sessions.requireRoles('STUDENT', 'TEACHER'),
+      },
       events,
       logger,
     ),
@@ -72,7 +75,7 @@ type Paper = {
 
 describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
   const run = randomUUID().slice(0, 8);
-  const ids = { teacher: '', student: '', other: '' };
+  const ids = { teacher: '', otherTeacher: '', student: '', other: '' };
   // single: [correct, wrong]; multiple: [correct, correct, wrong];
   // trueFalse: [correct, wrong]
   const q = {
@@ -209,6 +212,7 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
     });
     for (const [key, role] of [
       ['teacher', 'TEACHER'],
+      ['otherTeacher', 'TEACHER'],
       ['student', 'STUDENT'],
       ['other', 'STUDENT'],
     ] as const) {
@@ -479,5 +483,77 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
       where: { id: attemptId },
     });
     expect(stored.status).toBe('FORCE_SUBMITTED');
+  });
+
+  it('shows the result to its student, and the answers only after the exam ends', async () => {
+    const { attemptId } = await startedAttempt();
+    const result = (app = student) =>
+      request(app).get(`/api/v1/attempts/${attemptId}/result`);
+    await save(attemptId, q.single.id, [q.single.options[0]!]);
+    await save(attemptId, q.multiple.id, [q.multiple.options[0]!]);
+    const early = await result();
+    expect(early.status).toBe(409);
+    expect(early.body.error.code).toBe('ATTEMPT_NOT_SUBMITTED');
+    await request(student).post(`/api/v1/attempts/${attemptId}/submit`);
+
+    expect((await result(appAs())).status).toBe(401);
+    const strangers = [
+      appAs({ id: ids.other, role: 'STUDENT' }),
+      appAs({ id: ids.otherTeacher, role: 'TEACHER' }),
+    ];
+    for (const app of strangers) expect((await result(app)).status).toBe(404);
+
+    // Exam still running: score only, nothing that gives answers away.
+    const running = await result();
+    expect(running.status).toBe(200);
+    expect(running.body.data).toMatchObject({
+      attemptId,
+      examTitle: `Bài làm ${run}`,
+      status: 'SUBMITTED',
+      score: 1,
+      maxScore: 4,
+      questions: null,
+    });
+    expect(JSON.stringify(running.body)).not.toContain('isCorrect');
+
+    const expected = [
+      {
+        questionId: q.single.id,
+        explanation: 'Lời giải bí mật',
+        points: 1,
+        earnedPoints: 1,
+        selectedOptionIds: [q.single.options[0]],
+      },
+      {
+        questionId: q.multiple.id,
+        points: 2.5,
+        earnedPoints: 0,
+        selectedOptionIds: [q.multiple.options[0]],
+      },
+      {
+        questionId: q.trueFalse.id,
+        points: 0.5,
+        earnedPoints: 0,
+        selectedOptionIds: [],
+      },
+    ];
+    // The exam's teacher always sees the full result.
+    const teacher = await result(appAs({ id: ids.teacher, role: 'TEACHER' }));
+    expect(teacher.status).toBe(200);
+    expect(teacher.body.data.questions).toMatchObject(expected);
+    expect(teacher.body.data.questions[0].options).toEqual([
+      { id: q.single.options[0], content: 'Đáp án 0', isCorrect: true },
+      { id: q.single.options[1], content: 'Đáp án 1', isCorrect: false },
+    ]);
+
+    const { examId } = await prisma.attempt.findUniqueOrThrow({
+      where: { id: attemptId },
+    });
+    await prisma.exam.update({
+      where: { id: examId },
+      data: { status: 'ENDED' },
+    });
+    const ended = await result();
+    expect(ended.body.data.questions).toMatchObject(expected);
   });
 });

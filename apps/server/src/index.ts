@@ -95,14 +95,21 @@ try {
   // Mounted first: it serves POST /exams/:examId/attempts for students.
   // `realtime` is mounted after the HTTP server exists, so read it lazily.
   apiRouter.use(
-    createAttemptsRouter(prisma, sessions.requireRoles('STUDENT'), {
-      answerSaved: (attemptId) =>
-        realtime?.gateway.emitStudentUpdate(attemptId),
-      submitted: async (submission) => {
-        realtime?.gateway.emitSubmitted(submission);
-        await realtime?.gateway.emitStudentUpdate(submission.attemptId);
+    createAttemptsRouter(
+      prisma,
+      {
+        student: sessions.requireRoles('STUDENT'),
+        studentOrTeacher: sessions.requireRoles('STUDENT', 'TEACHER'),
       },
-    }),
+      {
+        answerSaved: (attemptId) =>
+          realtime?.gateway.emitStudentUpdate(attemptId),
+        submitted: async (submission) => {
+          realtime?.gateway.emitSubmitted(submission);
+          await realtime?.gateway.emitStudentUpdate(submission.attemptId);
+        },
+      },
+    ),
   );
   apiRouter.use(
     '/exams',

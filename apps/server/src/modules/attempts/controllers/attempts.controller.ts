@@ -6,6 +6,7 @@ import { handle } from '../../../core/http/error-handler.js';
 import { HttpError } from '../../../core/errors/http-error.js';
 import type { Submitted } from '../../../shared/realtime.js';
 import {
+  getAttemptResult,
   saveAnswer,
   startAttempt,
   submitAttempt,
@@ -38,12 +39,13 @@ function notify(fn: () => unknown, logger: Pick<Console, 'error'>) {
 }
 
 /**
- * Mounted on the API root (paths under /exams and /attempts).
- * `requireStudent` is `sessions.requireRoles('STUDENT')`.
+ * Mounted on the API root (paths under /exams and /attempts). `roles` are
+ * `sessions.requireRoles('STUDENT')` and
+ * `sessions.requireRoles('STUDENT', 'TEACHER')`: teachers only read results.
  */
 export function createAttemptsRouter(
   prisma: PrismaClient,
-  requireStudent: RequestHandler,
+  roles: { student: RequestHandler; studentOrTeacher: RequestHandler },
   events: AttemptEvents = {},
   logger: Pick<Console, 'error'> = console,
 ) {
@@ -52,7 +54,7 @@ export function createAttemptsRouter(
 
   router.post(
     '/exams/:examId/attempts',
-    requireStudent,
+    roles.student,
     handle(async (req, res) => {
       const examId = param(req, 'examId', 'Exam');
       const { created, paper } = await startAttempt(
@@ -65,7 +67,7 @@ export function createAttemptsRouter(
   );
   router.put(
     '/attempts/:attemptId/answers/:questionId',
-    requireStudent,
+    roles.student,
     handle(async (req, res) => {
       const attemptId = param(req, 'attemptId', 'Attempt');
       const questionId = param(req, 'questionId', 'Question');
@@ -83,7 +85,7 @@ export function createAttemptsRouter(
   );
   router.post(
     '/attempts/:attemptId/submit',
-    requireStudent,
+    roles.student,
     handle(async (req, res) => {
       const attemptId = param(req, 'attemptId', 'Attempt');
       const { submitted, summary } = await submitAttempt(
@@ -93,6 +95,15 @@ export function createAttemptsRouter(
       );
       res.json({ data: summary });
       notify(() => events.submitted?.(submitted), logger);
+    }),
+  );
+  router.get(
+    '/attempts/:attemptId/result',
+    roles.studentOrTeacher,
+    handle(async (req, res) => {
+      const attemptId = param(req, 'attemptId', 'Attempt');
+      const viewer = { id: req.principal!.id, role: req.principal!.role };
+      res.json({ data: await getAttemptResult(prisma, viewer, attemptId) });
     }),
   );
   return router;

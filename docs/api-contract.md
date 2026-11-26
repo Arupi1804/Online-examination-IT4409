@@ -60,6 +60,7 @@ Phần auth do TV2 phác thảo để frontend dựng mock; TV1 có quyền sử
 - `score` = tổng điểm câu đúng, `maxScore` = tổng `points` của kỳ thi; làm tròn 2 chữ số.
 - Luật này chỉ nằm ở `gradeAttempt()` (`apps/server/src/modules/attempts/services/grading.ts`, TV2). Nộp bài qua REST và auto/force submit của realtime đều gọi hàm này với dữ liệu đọc trong transaction của mình; không module nào tự viết lại cách chấm.
 - Thí sinh thấy điểm ngay khi nộp; đáp án đúng và lời giải chỉ hiện sau khi kỳ thi ENDED (tránh lộ đáp án cho người đang thi).
+- `GET /attempts/:id/result` dành cho thí sinh chủ bài làm và giáo viên chủ kỳ thi; người khác nhận 404, bài còn IN_PROGRESS trả 409 `ATTEMPT_NOT_SUBMITTED`. Với thí sinh, `questions` là null cho đến khi kỳ thi ENDED; giáo viên luôn thấy đầy đủ. Câu hỏi theo thứ tự gốc của kỳ thi, `earnedPoints` tính bằng `gradeAttempt()`.
 
 ## Thống kê
 
