@@ -1,5 +1,10 @@
 import { expect, it } from 'vitest';
-import { ExamInput, ProctorViolationPayload, RoomCode } from '../src/index.js';
+import {
+  ExamInput,
+  ProctorViolationPayload,
+  RoomCode,
+  SaveAnswerInput,
+} from '../src/index.js';
 
 it('rejects forbidden room-code characters from the PDF seed example', () => {
   expect(RoomCode.safeParse('DEMO01').success).toBe(false);
@@ -42,4 +47,25 @@ it('rejects duplicate exam question UUIDs written in different cases', () => {
       message: 'A question can appear only once',
     },
   ]);
+});
+
+it('normalizes answer option UUIDs and rejects case-only duplicates', () => {
+  const upper = questionId.toUpperCase();
+  expect(SaveAnswerInput.parse({ selectedOptionIds: [upper] })).toEqual({
+    selectedOptionIds: [questionId],
+  });
+  expect(SaveAnswerInput.parse({ selectedOptionIds: [] })).toEqual({
+    selectedOptionIds: [],
+  });
+  const duplicate = SaveAnswerInput.safeParse({
+    selectedOptionIds: [questionId, upper],
+  });
+  expect(duplicate.success).toBe(false);
+  const tooMany = SaveAnswerInput.safeParse({
+    selectedOptionIds: Array.from(
+      { length: 11 },
+      (_, i) => `${questionId.slice(0, -2)}${String(i).padStart(2, '0')}`,
+    ),
+  });
+  expect(tooMany.success).toBe(false);
 });

@@ -22,6 +22,7 @@ import {
 import { mountRealtime } from './modules/realtime/index.js';
 import { createQuestionsRouter } from './modules/questions/controllers/questions.controller.js';
 import { createExamsRouter } from './modules/exams/controllers/exams.controller.js';
+import { createAttemptsRouter } from './modules/attempts/controllers/attempts.controller.js';
 
 config({ path: findWorkspaceEnv(import.meta.url) ?? '.env' });
 const env = z
@@ -90,6 +91,25 @@ try {
   apiRouter.use(
     '/questions',
     createQuestionsRouter(prisma, sessions.requireRoles('TEACHER')),
+  );
+  // Mounted first: it serves POST /exams/:examId/attempts for students.
+  // `realtime` is mounted after the HTTP server exists, so read it lazily.
+  apiRouter.use(
+    createAttemptsRouter(
+      prisma,
+      {
+        student: sessions.requireRoles('STUDENT'),
+        studentOrTeacher: sessions.requireRoles('STUDENT', 'TEACHER'),
+      },
+      {
+        answerSaved: (attemptId) =>
+          realtime?.gateway.emitStudentUpdate(attemptId),
+        submitted: async (submission) => {
+          realtime?.gateway.emitSubmitted(submission);
+          await realtime?.gateway.emitStudentUpdate(submission.attemptId);
+        },
+      },
+    ),
   );
   apiRouter.use(
     '/exams',

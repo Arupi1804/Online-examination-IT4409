@@ -40,7 +40,7 @@ Auth theo `core-openapi`: `/api/v1/auth/register`, `/login`, `/me`, `/logout`. R
 
 Login đếm mọi request theo IP (30/15 phút), nhưng chỉ đếm lần sai theo tài khoản (5/15 phút). Login thành công reset counter tài khoản có điều kiện; không reset IP. Đủ ngưỡng sai thì request tiếp theo bị chặn đến hết cửa sổ, kể cả mật khẩu đúng. Đăng ký giới hạn 20 request hợp lệ về cấu trúc/IP/15 phút.
 
-Module nghiệp vụ (ví dụ `modules/questions`) nhận `PrismaClient` do `src/index.ts` tạo và `sessions.requireRoles(...)`, rồi được mount qua `apiRouter`. Test API câu hỏi dùng PostgreSQL thật (CI có sẵn service; local chạy `pnpm infra:up`) và tự bỏ qua khi không có `DATABASE_URL`.
+Module nghiệp vụ (ví dụ `modules/questions`) nhận `PrismaClient` do `src/index.ts` tạo và `sessions.requireRoles(...)`, rồi được mount qua `apiRouter`. `modules/attempts` (`createAttemptsRouter`) mount ở gốc `apiRouter` vì có cả `/exams/:examId/attempts` lẫn `/attempts/...`; hook `answerSaved`/`submitted` của nó gọi gateway realtime sau khi transaction commit. Test API câu hỏi dùng PostgreSQL thật (CI có sẵn service; local chạy `pnpm infra:up`) và tự bỏ qua khi không có `DATABASE_URL`.
 
 `prisma/schema.prisma` phản chiếu `database/init/*.sql` (xem `database/README.md`); không dùng Prisma Migrate. Prisma CLI không tự đọc `.env` ở root, nên gọi qua script `prisma` của package này:
 

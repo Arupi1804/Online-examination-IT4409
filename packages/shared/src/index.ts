@@ -76,6 +76,21 @@ export const ExamInput = z.object({
     }),
 });
 export type ExamInput = z.infer<typeof ExamInput>;
+// Lowercased before the duplicate check: UUIDs are case-insensitive.
+export const SaveAnswerInput = z.object({
+  selectedOptionIds: z
+    .array(
+      z
+        .string()
+        .uuid()
+        .transform((id) => id.toLowerCase()),
+    )
+    .max(10)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'An option can be selected only once',
+    }),
+});
+export type SaveAnswerInput = z.infer<typeof SaveAnswerInput>;
 // Codes are shown uppercase; accept what a student types in either case.
 export const JoinExamInput = z.object({
   roomCode: z
