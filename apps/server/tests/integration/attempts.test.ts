@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import { createClient } from 'redis';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -168,10 +168,15 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
       .put(`/api/v1/attempts/${attemptId}/answers/${questionId}`)
       .send({ selectedOptionIds: ids });
 
-  /** Runs `fn` while another transaction holds the attempt and submits it. */
-  async function whileSubmittedElsewhere<T>(
-    attemptId: string,
-    fn: () => Promise<T>,
+  /**
+   * Runs `fn` while another transaction holds a row lock, and releases it
+   * once `fn` is waiting on that lock (`waitFor`) and `beforeRelease` is done.
+   */
+  async function whileLocked<T>(
+    lock: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    waitFor: string,
+    fn: () => PromiseLike<T>,
+    beforeRelease: () => Promise<unknown> = async () => undefined,
   ) {
     let commit!: () => void;
     const committed = new Promise<void>((resolve) => (commit = resolve));
@@ -179,8 +184,36 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
     const lockHeld = new Promise<void>((resolve) => (locked = resolve));
     const other = prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`
-          SELECT id FROM attempts WHERE id = ${attemptId}::uuid FOR UPDATE`;
+        await lock(tx);
+        locked();
+        await committed;
+      },
+      { timeout: 15_000 },
+    );
+    await lockHeld;
+    const pending = fn();
+    try {
+      await waitForLockWait(prisma, waitFor);
+      await beforeRelease();
+    } finally {
+      commit();
+      await other;
+    }
+    return pending;
+  }
+
+  const lockAttemptRow = (tx: Prisma.TransactionClient, attemptId: string) =>
+    tx.$queryRaw`
+      SELECT id FROM attempts WHERE id = ${attemptId}::uuid FOR UPDATE`;
+
+  /** Runs `fn` while another transaction holds the attempt and submits it. */
+  const whileSubmittedElsewhere = <T>(
+    attemptId: string,
+    fn: () => PromiseLike<T>,
+  ) =>
+    whileLocked(
+      async (tx) => {
+        await lockAttemptRow(tx, attemptId);
         await tx.attempt.update({
           where: { id: attemptId },
           data: {
@@ -190,21 +223,24 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
             maxScore: 4,
           },
         });
-        locked();
-        await committed;
       },
-      { timeout: 15_000 },
+      ATTEMPT_LOCK,
+      fn,
     );
-    await lockHeld;
-    const pending = fn();
-    try {
-      await waitForLockWait(prisma, ATTEMPT_LOCK);
-    } finally {
-      commit();
-      await other;
-    }
-    return pending;
+
+  // Deadlines set on the PostgreSQL clock, which is what the API compares.
+  async function endExamAtDbClock(examId: string, seconds: number) {
+    await prisma.$executeRaw`
+      UPDATE exams
+      SET start_time = clock_timestamp() - interval '1 hour',
+          end_time = clock_timestamp() + make_interval(secs => ${seconds})
+      WHERE id = ${examId}::uuid`;
   }
+  const examOf = async (attemptId: string) =>
+    (await prisma.attempt.findUniqueOrThrow({ where: { id: attemptId } }))
+      .examId;
+  // Holds the lock until a deadline set 1 s ahead has passed.
+  const pastDeadline = () => new Promise((r) => setTimeout(r, 1_500));
 
   beforeAll(async () => {
     prisma = new PrismaClient({
@@ -556,4 +592,65 @@ describe.skipIf(!process.env.DATABASE_URL)('attempts API', () => {
     const ended = await result();
     expect(ended.body.data.questions).toMatchObject(expected);
   });
+
+  // Review #15: now() is the transaction start, so a request that waited for
+  // the lock past a deadline was judged by the time before it waited.
+  it('rejects an autosave that waited for a lock past endTime', async () => {
+    const saving = await startedAttempt();
+    await endExamAtDbClock(await examOf(saving.attemptId), 1);
+    const saved = await whileLocked(
+      (tx) => lockAttemptRow(tx, saving.attemptId),
+      ATTEMPT_LOCK,
+      () =>
+        save(saving.attemptId, q.single.id, [q.single.options[0]!]).then(
+          (r) => r,
+        ),
+      pastDeadline,
+    );
+    expect(saved.status).toBe(422);
+    expect(saved.body.error.code).toBe('EXAM_ENDED');
+    expect(
+      await prisma.answer.count({ where: { attemptId: saving.attemptId } }),
+    ).toBe(0);
+  }, 15_000);
+
+  it('rejects a submission that waited for a lock past endTime + 5 s', async () => {
+    // The submission window closes 1 s from now (endTime + 5 s).
+    const submitting = await startedAttempt();
+    await endExamAtDbClock(await examOf(submitting.attemptId), -4);
+    const submitted = await whileLocked(
+      (tx) => lockAttemptRow(tx, submitting.attemptId),
+      ATTEMPT_LOCK,
+      () =>
+        request(student)
+          .post(`/api/v1/attempts/${submitting.attemptId}/submit`)
+          .then((r) => r),
+      pastDeadline,
+    );
+    expect(submitted.status).toBe(422);
+    expect(submitted.body.error.code).toBe('SUBMIT_TOO_LATE');
+    expect(
+      (
+        await prisma.attempt.findUniqueOrThrow({
+          where: { id: submitting.attemptId },
+        })
+      ).status,
+    ).toBe('IN_PROGRESS');
+  }, 15_000);
+
+  it('rejects a start that waited for the exam lock past endTime', async () => {
+    // Starting waits on the exam row (e.g. the worker closing the exam).
+    const examId = await newExam();
+    await endExamAtDbClock(examId, 1);
+    const started = await whileLocked(
+      (tx) =>
+        tx.$queryRaw`SELECT id FROM exams WHERE id = ${examId}::uuid FOR UPDATE`,
+      'SELECT status, end_time, max_attempts',
+      () => start(examId),
+      pastDeadline,
+    );
+    expect(started.status).toBe(422);
+    expect(started.body.error.code).toBe('EXAM_ENDED');
+    expect(await prisma.attempt.count({ where: { examId } })).toBe(0);
+  }, 15_000);
 });

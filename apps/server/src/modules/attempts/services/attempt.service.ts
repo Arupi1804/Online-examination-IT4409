@@ -120,10 +120,9 @@ export async function startAttempt(
             status: string;
             end_time: Date | null;
             max_attempts: number;
-            now: Date;
           }[]
         >`
-          SELECT status, end_time, max_attempts, now() AS now FROM exams
+          SELECT status, end_time, max_attempts FROM exams
           WHERE id = ${examId}::uuid
           FOR SHARE`;
         if (!exam || exam.status === 'DRAFT') {
@@ -146,7 +145,7 @@ export async function startAttempt(
         if (
           exam.status === 'ENDED' ||
           !exam.end_time ||
-          exam.end_time < exam.now
+          exam.end_time < (await databaseNow(tx))
         ) {
           throw new HttpError(422, ERROR_CODES.EXAM_ENDED, 'Exam has ended');
         }
